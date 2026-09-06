@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { zipSync } from "fflate";
 import { encode } from "@msgpack/msgpack";
 import { NovelAIImageProvider } from "./novelai";
 
@@ -110,4 +111,70 @@ describe("NovelAIImageProvider", () => {
       parameters: {},
     })).rejects.toThrow("Invalid request: v4_prompt is required");
   });
+
+  test("falls back on 404 with the same request and decodes a compressed ZIP", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    let cancelled = false;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      if (calls.length === 1) return new Response(new ReadableStream({
+        cancel() { cancelled = true; },
+      }), { status: 404 });
+      expect(cancelled).toBe(true);
+      return new Response(new Uint8Array(zipSync({ "image_0.png": TINY_PNG }, { level: 6 })));
+    }) as typeof fetch;
+    const result = await provider.generate("proxy-token", " https://nai-proxy.example/root/ ", {
+      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+    });
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://nai-proxy.example/root/ai/generate-image-stream",
+      "https://nai-proxy.example/root/ai/generate-image",
+    ]);
+    expect(calls[1].init?.body).toBe(calls[0].init?.body);
+    expect(calls[1].init?.headers).toEqual(calls[0].init?.headers);
+    expect((calls[1].init?.headers as Record<string, string>).Authorization).toBe("Bearer proxy-token");
+    expect(result.imageDataUrl).toBe(`data:image/png;base64,${Buffer.from(TINY_PNG).toString("base64")}`);
+  });
+
+  for (const status of [400, 401, 403, 429, 500]) {
+    test(`does not retry HTTP ${status}`, async () => {
+      let calls = 0;
+      globalThis.fetch = (async (_input: RequestInfo | URL) => {
+        calls++;
+        return new Response("generation rejected", { status });
+      }) as typeof fetch;
+      await expect(provider.generate("token", "https://nai-proxy.example", {
+        prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+      })).rejects.toThrow("generation rejected");
+      expect(calls).toBe(1);
+    });
+  }
+
+  test("surfaces the fallback error without a third request", async () => {
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL) => {
+      calls++;
+      return new Response(calls === 1 ? "missing stream route" : "missing generation route", { status: 404 });
+    }) as typeof fetch;
+    await expect(provider.generate("token", "https://nai-proxy.example", {
+      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+    })).rejects.toThrow("missing generation route");
+    expect(calls).toBe(2);
+  });
+
+  test("does not start the fallback after cancellation", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL) => {
+      calls++;
+      return new Response(new ReadableStream({
+        cancel() { controller.abort(new Error("cancelled by user")); },
+      }), { status: 404 });
+    }) as typeof fetch;
+    await expect(provider.generate("token", "https://nai-proxy.example", {
+      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {}, signal: controller.signal,
+    })).rejects.toThrow("cancelled by user");
+    expect(calls).toBe(1);
+  });
+
 });

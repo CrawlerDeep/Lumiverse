@@ -1,3 +1,4 @@
+import { unzipSync } from "fflate";
 import { decodeMulti } from "@msgpack/msgpack";
 import sharp from "../../utils/sharp-config";
 import type { ImageProvider } from "../provider";
@@ -213,14 +214,26 @@ export class NovelAIImageProvider implements ImageProvider {
     const outerBody = { input: request.prompt, model, action: "generate", parameters: naiParams };
     const finalBody = applyRawOverride(outerBody, params.rawRequestOverride);
 
-    const res = await fetchWithPreflightAbort(`${this.baseUrl(apiUrl)}/ai/generate-image-stream`, {
+    const baseUrl = this.baseUrl(apiUrl);
+    const init: RequestInit = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(finalBody),
-    }, request.signal);
+    };
+    let res = await fetchWithPreflightAbort(`${baseUrl}/ai/generate-image-stream`, init, request.signal);
+
+    // Some compatible proxies expose only the non-streaming route. Retry only
+    // a missing endpoint, never auth/rate-limit/server errors or failed reads:
+    // those may have already started a billable generation.
+    if (res.status === 404) {
+      if (res.body) {
+        await cancelStreamAndCloseConnection(res.body.getReader(), res);
+      }
+      res = await fetchWithPreflightAbort(`${baseUrl}/ai/generate-image`, init, request.signal);
+    }
 
     if (!res.ok) await throwProviderResponseError(this.displayName, "image generate", res);
 
@@ -309,16 +322,23 @@ async function extractImageFromResponse(res: Response, signal?: AbortSignal): Pr
   let imageBytes = extractPngFromBuffer(primaryBuffer);
   if (imageBytes) return `data:image/png;base64,${uint8ToBase64(imageBytes)}`;
 
-  // Strategy 2: ZIP archive scan
+  // Non-streaming endpoints return ZIP archives, including deflated PNG files.
   const pkIndex = findBytes(fullBuffer, [0x50, 0x4b, 0x03, 0x04]);
   if (pkIndex !== -1) {
-    const zipSlice = fullBuffer.slice(pkIndex);
-    const zipBuffer = zipSlice.buffer.slice(
-      zipSlice.byteOffset,
-      zipSlice.byteOffset + zipSlice.byteLength
-    ) as ArrayBuffer;
-    imageBytes = extractPngFromBuffer(zipBuffer);
-    if (imageBytes) return `data:image/png;base64,${uint8ToBase64(imageBytes)}`;
+    let selectedImage = false;
+    const images = unzipSync(fullBuffer.slice(pkIndex), {
+      filter: (file) => {
+        if (selectedImage || !/\.png$/i.test(file.name) || file.originalSize > NOVELAI_MAX_IMAGE_BYTES) return false;
+        selectedImage = true;
+        return true;
+      },
+    });
+    for (const bytes of Object.values(images)) {
+      imageBytes = extractPngFromBuffer(bytes.buffer.slice(
+        bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer);
+      if (imageBytes) return `data:image/png;base64,${uint8ToBase64(imageBytes)}`;
+    }
   }
 
   // Strategy 3: MessagePack decode
