@@ -534,6 +534,8 @@
     "deleteConfirm": "刪除"
   },
   "imageGenConnectionForm": {
+    "novelaiNonStreaming": "使用非串流生成",
+    "novelaiNonStreamingHint": "如果代理伺服器不支援串流圖像回應，請啟用此選項。",
     "setAsDefault": "設為默認圖像生成連接",
     "selectModel": "選擇模型...",
     "noModelsDynamic": "未找到模型。請刷新，或手動輸入。",

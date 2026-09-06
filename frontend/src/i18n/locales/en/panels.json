@@ -663,6 +663,8 @@
     "deleteConfirm": "Delete"
   },
   "imageGenConnectionForm": {
+    "novelaiNonStreaming": "Use non-streaming generation",
+    "novelaiNonStreamingHint": "Enable for proxies that do not support streaming image responses.",
     "setAsDefault": "Set as default image gen connection",
     "selectModel": "Select model...",
     "noModelsDynamic": "No models found. Refresh, or enter one manually.",

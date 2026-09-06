@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { zipSync } from "fflate";
 import { encode } from "@msgpack/msgpack";
+import sharp from "../../utils/sharp-config";
 import { NovelAIImageProvider } from "./novelai";
 
-const TINY_PNG = new Uint8Array([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-  0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-]);
+const TINY_PNG = new Uint8Array(await sharp({
+  create: { width: 1, height: 1, channels: 3, background: { r: 20, g: 40, b: 60 } },
+}).png().toBuffer());
 
 describe("NovelAIImageProvider", () => {
   const provider = new NovelAIImageProvider();
@@ -41,32 +41,67 @@ describe("NovelAIImageProvider", () => {
     expect((calls[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer pst-test-token");
   });
 
-  test("does not invent a validation route for a custom endpoint", async () => {
-    let calls = 0;
-    globalThis.fetch = (async (_input: RequestInfo | URL) => {
-      calls++;
-      return new Response("{}");
-    }) as typeof fetch;
-    await expect(provider.validateKey("token", "https://proxy.example/custom?route=image"))
-      .rejects.toThrow("Key validation is unavailable for custom NovelAI generation endpoints");
-    expect(calls).toBe(0);
-  });
+  for (const [baseUrl, expectedUrl] of [
+    ["https://image.novelai.net", "https://image.novelai.net/user/information"],
+    [" https://proxy.example/root/ ", "https://proxy.example/root/user/information"],
+  ]) {
+    test(`validates saved base URL ${baseUrl} without generating`, async () => {
+      const calls: string[] = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL) => {
+        calls.push(String(_input));
+        return new Response("{}");
+      }) as typeof fetch;
+      await expect(provider.validateKey("token", baseUrl)).resolves.toBe(true);
+      expect(calls).toEqual([expectedUrl]);
+    });
+  }
 
-  test("uses the complete custom endpoint without appending or stripping anything", async () => {
+  test("preserves the existing proxy base URL contract", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       calls.push(String(input));
       return new Response(TINY_PNG, { status: 200 });
     }) as typeof fetch;
 
-    await provider.generate("pst-test-token", " https://nai-proxy.example/root/generate/?route=image ", {
+    await provider.generate("pst-test-token", " https://nai-proxy.example/root/ ", {
       prompt: "a fox",
       model: "nai-diffusion-5-full",
       parameters: {},
     });
 
-    expect(calls).toEqual(["https://nai-proxy.example/root/generate/?route=image"]);
+    expect(calls).toEqual(["https://nai-proxy.example/root/ai/generate-image-stream"]);
   });
+
+  for (const nonStreaming of [undefined, false, true]) {
+    for (const baseUrl of ["", "https://image.novelai.net", " https://proxy.example/root/ "]) {
+      test(`selects transport from the profile (${nonStreaming}) for ${baseUrl || "the default URL"}`, async () => {
+        const calls: Array<{ url: string; init?: RequestInit }> = [];
+        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          calls.push({ url: String(input), init });
+          return new Response(TINY_PNG);
+        }) as typeof fetch;
+        await provider.generate("token", baseUrl, {
+          prompt: "a fox", model: "nai-diffusion-5-full",
+          connectionOptions: nonStreaming === undefined ? undefined : { novelai: { nonStreaming } },
+          parameters: {
+            // Per-image parameters and raw overrides cannot change connection transport.
+            nonStreaming: !nonStreaming,
+            rawRequestOverride: JSON.stringify({ parameters: { stream: "override", steps: 12 } }),
+          },
+        });
+        expect(calls).toHaveLength(1);
+        const base = baseUrl.includes("proxy") ? "https://proxy.example/root" : "https://image.novelai.net";
+        expect(calls[0].url).toBe(`${base}/ai/generate-image${nonStreaming ? "" : "-stream"}`);
+        expect(calls[0].init?.method).toBe("POST");
+        expect((calls[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer token");
+        const body = JSON.parse(String(calls[0].init?.body));
+        expect(body.parameters.stream).toBe(nonStreaming ? undefined : "msgpack");
+        expect(body.parameters.steps).toBe(12);
+        expect(body.connectionOptions).toBeUndefined();
+        expect(body.action).toBe("generate");
+      });
+    }
+  }
 
   test("uses the structured V4+ prompt payload for both V5 models", async () => {
     const bodies: any[] = [];
@@ -127,8 +162,9 @@ describe("NovelAIImageProvider", () => {
       calls.push({ url: String(input), init });
       return new Response(new Uint8Array(zipSync({ "image_0.png": TINY_PNG }, { level: 6 })));
     }) as typeof fetch;
-    const result = await provider.generate("proxy-token", "https://proxy.example/ai/generate-image", {
+    const result = await provider.generate("proxy-token", "https://proxy.example", {
       prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+      connectionOptions: { novelai: { nonStreaming: true } },
     });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://proxy.example/ai/generate-image");
@@ -137,31 +173,75 @@ describe("NovelAIImageProvider", () => {
     expect(result.imageDataUrl).toBe(`data:image/png;base64,${Buffer.from(TINY_PNG).toString("base64")}`);
   });
 
-  for (const status of [400, 401, 403, 404, 429, 500]) {
-    test(`does not retry HTTP ${status}`, async () => {
+  test("decodes real PNGs in ZIPs with multiple DEFLATE stored blocks", async () => {
+    let state = 123456789;
+    const pixels = Uint8Array.from({ length: 256 * 256 * 3 }, () => {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return state & 255;
+    });
+    const png = await sharp(pixels, { raw: { width: 256, height: 256, channels: 3 } }).png().toBuffer();
+    const archive = zipSync({ "image_0.png": png }, { level: 6 });
+    globalThis.fetch = (async (_input: RequestInfo | URL) => new Response(new Uint8Array(archive))) as typeof fetch;
+    const result = await provider.generate("token", "", {
+      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+      connectionOptions: { novelai: { nonStreaming: true } },
+    });
+    const decoded = Buffer.from(result.imageDataUrl.split(",")[1], "base64");
+    expect(decoded.equals(png)).toBe(true);
+    expect(await sharp(decoded).raw().toBuffer()).toEqual(Buffer.from(pixels));
+  });
+
+  test("skips non-image ZIP entries and extracts only the first PNG", async () => {
+    const archive = zipSync({ "metadata.json": new TextEncoder().encode("{}"), "image_0.png": TINY_PNG, "image_1.png": TINY_PNG });
+    globalThis.fetch = (async (_input: RequestInfo | URL) => new Response(new Uint8Array(archive))) as typeof fetch;
+    const result = await provider.generate("token", "", {
+      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+      connectionOptions: { novelai: { nonStreaming: true } },
+    });
+    expect(result.imageDataUrl).toBe(`data:image/png;base64,${Buffer.from(TINY_PNG).toString("base64")}`);
+  });
+
+  test("rejects ZIP entries declared larger than the image limit", async () => {
+    const archive = zipSync({ "image_0.png": TINY_PNG });
+    const directoryOffset = Buffer.from(archive).indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    new DataView(archive.buffer).setUint32(directoryOffset + 24, 64 * 1024 * 1024 + 1, true);
+    globalThis.fetch = (async (_input: RequestInfo | URL) => new Response(new Uint8Array(archive))) as typeof fetch;
+    await expect(provider.generate("token", "", {
+      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+    })).rejects.toThrow("NovelAI ZIP response did not contain a supported PNG image");
+  });
+
+  for (const nonStreaming of [false, true]) {
+    for (const status of [400, 401, 403, 404, 429, 500]) {
+      test(`does not retry HTTP ${status} with non-streaming ${nonStreaming}`, async () => {
+        let calls = 0;
+        globalThis.fetch = (async (_input: RequestInfo | URL) => {
+          calls++;
+          return new Response("generation rejected", { status });
+        }) as typeof fetch;
+        await expect(provider.generate("token", "https://proxy.example/custom", {
+          prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
+          connectionOptions: { novelai: { nonStreaming } },
+        })).rejects.toThrow("generation rejected");
+        expect(calls).toBe(1);
+      });
+    }
+
+    test(`does not send a request after cancellation with non-streaming ${nonStreaming}`, async () => {
+      const controller = new AbortController();
+      controller.abort(new Error("cancelled by user"));
       let calls = 0;
       globalThis.fetch = (async (_input: RequestInfo | URL) => {
         calls++;
-        return new Response("generation rejected", { status });
+        return new Response(TINY_PNG);
       }) as typeof fetch;
       await expect(provider.generate("token", "https://proxy.example/custom", {
-        prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
-      })).rejects.toThrow("generation rejected");
-      expect(calls).toBe(1);
+        prompt: "a fox", model: "nai-diffusion-5-full", parameters: {}, signal: controller.signal,
+        connectionOptions: { novelai: { nonStreaming } },
+      })).rejects.toThrow("cancelled by user");
+      expect(calls).toBe(0);
     });
   }
-
-  test("does not send a request after cancellation", async () => {
-    const controller = new AbortController();
-    controller.abort(new Error("cancelled by user"));
-    let calls = 0;
-    globalThis.fetch = (async (_input: RequestInfo | URL) => {
-      calls++;
-      return new Response(TINY_PNG);
-    }) as typeof fetch;
-    await expect(provider.generate("token", "https://proxy.example/custom", {
-      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {}, signal: controller.signal,
-    })).rejects.toThrow("cancelled by user");
-    expect(calls).toBe(0);
-  });
 });

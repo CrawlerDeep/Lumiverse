@@ -534,6 +534,7 @@ export async function generateSceneBackground(
       negativePrompt: promptResult.negativePrompt,
       model: connection.model,
       parameters: params,
+      connectionOptions: connection.metadata,
       signal: generationSignal.signal,
     };
 
