@@ -101,7 +101,7 @@ export class NovelAIImageProvider implements ImageProvider {
       { id: "nai-diffusion-3", label: "NAI Diffusion Anime V3" },
       { id: "nai-diffusion-furry-3", label: "NAI Diffusion Furry V3" },
     ],
-    defaultUrl: "https://image.novelai.net",
+    defaultUrl: "https://image.novelai.net/ai/generate-image-stream",
   };
 
   async generate(apiKey: string, apiUrl: string, request: ImageGenRequest): Promise<ImageGenResponse> {
@@ -214,26 +214,16 @@ export class NovelAIImageProvider implements ImageProvider {
     const outerBody = { input: request.prompt, model, action: "generate", parameters: naiParams };
     const finalBody = applyRawOverride(outerBody, params.rawRequestOverride);
 
-    const baseUrl = this.baseUrl(apiUrl);
-    const init: RequestInit = {
+    // Custom URLs are complete endpoints. Do not infer routes or retry elsewhere.
+    const endpoint = apiUrl.trim() || this.capabilities.defaultUrl;
+    const res = await fetchWithPreflightAbort(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(finalBody),
-    };
-    let res = await fetchWithPreflightAbort(`${baseUrl}/ai/generate-image-stream`, init, request.signal);
-
-    // Some compatible proxies expose only the non-streaming route. Retry only
-    // a missing endpoint, never auth/rate-limit/server errors or failed reads:
-    // those may have already started a billable generation.
-    if (res.status === 404) {
-      if (res.body) {
-        await cancelStreamAndCloseConnection(res.body.getReader(), res);
-      }
-      res = await fetchWithPreflightAbort(`${baseUrl}/ai/generate-image`, init, request.signal);
-    }
+    }, request.signal);
 
     if (!res.ok) await throwProviderResponseError(this.displayName, "image generate", res);
 
@@ -242,11 +232,19 @@ export class NovelAIImageProvider implements ImageProvider {
   }
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {
+    if (apiUrl.trim() && apiUrl.trim() !== this.capabilities.defaultUrl) {
+      throw new ProviderRequestError({
+        provider: this.displayName,
+        operation: "authentication",
+        detail: "Key validation is unavailable for custom NovelAI generation endpoints. Save the profile and generate an image to verify access.",
+        retryable: false,
+      });
+    }
     try {
       // Validate against the Image API itself. NovelAI documents this as an
       // authenticated, non-generation endpoint and accepts persistent API
       // tokens here; the Primary API is not the service this provider uses.
-      const res = await fetch(`${this.baseUrl(apiUrl)}/user/information`, {
+      const res = await fetch("https://image.novelai.net/user/information", {
         headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!res.ok) await throwProviderResponseError(this.displayName, "authentication", res);
@@ -261,9 +259,6 @@ export class NovelAIImageProvider implements ImageProvider {
     return this.capabilities.staticModels || [];
   }
 
-  private baseUrl(apiUrl: string): string {
-    return (apiUrl.trim() || this.capabilities.defaultUrl).replace(/\/+$/, "");
-  }
 }
 
 // --- Helper functions extracted from image-gen.service.ts ---

@@ -35,38 +35,37 @@ describe("NovelAIImageProvider", () => {
       });
     }) as typeof fetch;
 
-    await expect(provider.validateKey("pst-test-token", "https://image.novelai.net")).resolves.toBe(true);
+    await expect(provider.validateKey("pst-test-token", "")).resolves.toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe("https://image.novelai.net/user/information");
     expect((calls[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer pst-test-token");
   });
 
-  test("uses the configured base URL for validation", async () => {
-    const calls: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      calls.push(String(input));
-      return new Response("{}", { status: 200 });
+  test("does not invent a validation route for a custom endpoint", async () => {
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL) => {
+      calls++;
+      return new Response("{}");
     }) as typeof fetch;
-
-    await expect(provider.validateKey("pst-test-token", " https://nai-proxy.example/api/ ")).resolves.toBe(true);
-
-    expect(calls).toEqual(["https://nai-proxy.example/api/user/information"]);
+    await expect(provider.validateKey("token", "https://proxy.example/custom?route=image"))
+      .rejects.toThrow("Key validation is unavailable for custom NovelAI generation endpoints");
+    expect(calls).toBe(0);
   });
 
-  test("uses the configured base URL for image generation", async () => {
+  test("uses the complete custom endpoint without appending or stripping anything", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       calls.push(String(input));
       return new Response(TINY_PNG, { status: 200 });
     }) as typeof fetch;
 
-    await provider.generate("pst-test-token", "https://nai-proxy.example/root/", {
+    await provider.generate("pst-test-token", " https://nai-proxy.example/root/generate/?route=image ", {
       prompt: "a fox",
       model: "nai-diffusion-5-full",
       parameters: {},
     });
 
-    expect(calls).toEqual(["https://nai-proxy.example/root/ai/generate-image-stream"]);
+    expect(calls).toEqual(["https://nai-proxy.example/root/generate/?route=image"]);
   });
 
   test("uses the structured V4+ prompt payload for both V5 models", async () => {
@@ -77,7 +76,7 @@ describe("NovelAIImageProvider", () => {
     }) as typeof fetch;
 
     for (const model of ["nai-diffusion-5-full", "nai-diffusion-5-curated"]) {
-      await provider.generate("pst-test-token", "https://image.novelai.net", {
+      await provider.generate("pst-test-token", "", {
         prompt: "two characters, outdoors",
         model,
         parameters: {
@@ -105,76 +104,64 @@ describe("NovelAIImageProvider", () => {
       { status: 200, headers: { "Content-Type": "application/msgpack" } },
     )) as typeof fetch;
 
-    await expect(provider.generate("pst-test-token", "https://image.novelai.net", {
+    await expect(provider.generate("pst-test-token", "", {
       prompt: "a fox",
       model: "nai-diffusion-5-full",
       parameters: {},
     })).rejects.toThrow("Invalid request: v4_prompt is required");
   });
 
-  test("falls back on 404 with the same request and decodes a compressed ZIP", async () => {
+  test("uses the official streaming endpoint when the URL is blank", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return new Response(TINY_PNG);
+    }) as typeof fetch;
+    await provider.generate("token", "  ", { prompt: "a fox", model: "nai-diffusion-5-full", parameters: {} });
+    expect(calls).toEqual(["https://image.novelai.net/ai/generate-image-stream"]);
+  });
+
+  test("decodes compressed ZIP images from a custom endpoint", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    let cancelled = false;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init });
-      if (calls.length === 1) return new Response(new ReadableStream({
-        cancel() { cancelled = true; },
-      }), { status: 404 });
-      expect(cancelled).toBe(true);
       return new Response(new Uint8Array(zipSync({ "image_0.png": TINY_PNG }, { level: 6 })));
     }) as typeof fetch;
-    const result = await provider.generate("proxy-token", " https://nai-proxy.example/root/ ", {
+    const result = await provider.generate("proxy-token", "https://proxy.example/ai/generate-image", {
       prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
     });
-    expect(calls.map((c) => c.url)).toEqual([
-      "https://nai-proxy.example/root/ai/generate-image-stream",
-      "https://nai-proxy.example/root/ai/generate-image",
-    ]);
-    expect(calls[1].init?.body).toBe(calls[0].init?.body);
-    expect(calls[1].init?.headers).toEqual(calls[0].init?.headers);
-    expect((calls[1].init?.headers as Record<string, string>).Authorization).toBe("Bearer proxy-token");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("https://proxy.example/ai/generate-image");
+    expect((calls[0].init?.headers as Record<string, string>).Authorization).toBe("Bearer proxy-token");
+    expect(JSON.parse(String(calls[0].init?.body)).input).toBe("a fox");
     expect(result.imageDataUrl).toBe(`data:image/png;base64,${Buffer.from(TINY_PNG).toString("base64")}`);
   });
 
-  for (const status of [400, 401, 403, 429, 500]) {
+  for (const status of [400, 401, 403, 404, 429, 500]) {
     test(`does not retry HTTP ${status}`, async () => {
       let calls = 0;
       globalThis.fetch = (async (_input: RequestInfo | URL) => {
         calls++;
         return new Response("generation rejected", { status });
       }) as typeof fetch;
-      await expect(provider.generate("token", "https://nai-proxy.example", {
+      await expect(provider.generate("token", "https://proxy.example/custom", {
         prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
       })).rejects.toThrow("generation rejected");
       expect(calls).toBe(1);
     });
   }
 
-  test("surfaces the fallback error without a third request", async () => {
-    let calls = 0;
-    globalThis.fetch = (async (_input: RequestInfo | URL) => {
-      calls++;
-      return new Response(calls === 1 ? "missing stream route" : "missing generation route", { status: 404 });
-    }) as typeof fetch;
-    await expect(provider.generate("token", "https://nai-proxy.example", {
-      prompt: "a fox", model: "nai-diffusion-5-full", parameters: {},
-    })).rejects.toThrow("missing generation route");
-    expect(calls).toBe(2);
-  });
-
-  test("does not start the fallback after cancellation", async () => {
+  test("does not send a request after cancellation", async () => {
     const controller = new AbortController();
+    controller.abort(new Error("cancelled by user"));
     let calls = 0;
     globalThis.fetch = (async (_input: RequestInfo | URL) => {
       calls++;
-      return new Response(new ReadableStream({
-        cancel() { controller.abort(new Error("cancelled by user")); },
-      }), { status: 404 });
+      return new Response(TINY_PNG);
     }) as typeof fetch;
-    await expect(provider.generate("token", "https://nai-proxy.example", {
+    await expect(provider.generate("token", "https://proxy.example/custom", {
       prompt: "a fox", model: "nai-diffusion-5-full", parameters: {}, signal: controller.signal,
     })).rejects.toThrow("cancelled by user");
-    expect(calls).toBe(1);
+    expect(calls).toBe(0);
   });
-
 });
