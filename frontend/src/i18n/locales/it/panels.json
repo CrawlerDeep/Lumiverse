@@ -534,6 +534,8 @@
     "deleteConfirm": "Elimina"
   },
   "imageGenConnectionForm": {
+    "novelaiNonStreaming": "Usa la generazione senza streaming",
+    "novelaiNonStreamingHint": "Attiva questa opzione per i proxy che non supportano le risposte di immagini in streaming.",
     "setAsDefault": "Imposta come connessione generazione immagini predefinita",
     "selectModel": "Seleziona modello...",
     "noModelsDynamic": "Nessun modello trovato. Aggiorna o inseriscine uno manualmente.",

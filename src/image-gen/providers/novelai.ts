@@ -1,3 +1,4 @@
+import { unzipSync } from "fflate";
 import { decodeMulti } from "@msgpack/msgpack";
 import sharp from "../../utils/sharp-config";
 import type { ImageProvider } from "../provider";
@@ -104,6 +105,7 @@ export class NovelAIImageProvider implements ImageProvider {
   };
 
   async generate(apiKey: string, apiUrl: string, request: ImageGenRequest): Promise<ImageGenResponse> {
+    const nonStreaming = request.connectionOptions?.novelai?.nonStreaming === true;
     const params = request.parameters;
     const model = request.model || "nai-diffusion-4-5-full";
     const [width, height] = String(params.resolution || "1216x832").split("x").map(Number);
@@ -140,7 +142,6 @@ export class NovelAIImageProvider implements ImageProvider {
       deliberate_euler_ancestral_bug: false,
       prefer_brownian: true,
       image_format: "png",
-      stream: "msgpack",
     };
 
     // Character tags from scene analysis (passed through parameters)
@@ -213,7 +214,14 @@ export class NovelAIImageProvider implements ImageProvider {
     const outerBody = { input: request.prompt, model, action: "generate", parameters: naiParams };
     const finalBody = applyRawOverride(outerBody, params.rawRequestOverride);
 
-    const res = await fetchWithPreflightAbort(`${this.baseUrl(apiUrl)}/ai/generate-image-stream`, {
+    // The saved connection controls transport, including when raw parameters are supplied.
+    if (finalBody.parameters && typeof finalBody.parameters === "object") {
+      if (nonStreaming) delete finalBody.parameters.stream;
+      else finalBody.parameters.stream = "msgpack";
+    }
+    const route = nonStreaming ? "/ai/generate-image" : "/ai/generate-image-stream";
+    const endpoint = `${this.baseUrl(apiUrl)}${route}`;
+    const res = await fetchWithPreflightAbort(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -300,28 +308,34 @@ async function extractImageFromResponse(res: Response, signal?: AbortSignal): Pr
     fullBuffer = new Uint8Array(await res.arrayBuffer());
   }
 
+  // Decode archives before scanning for PNG signatures: DEFLATE stored blocks
+  // can contain PNG bytes interrupted by block headers that are not image data.
+  if (fullBuffer[0] === 0x50 && fullBuffer[1] === 0x4b && fullBuffer[2] === 0x03 && fullBuffer[3] === 0x04) {
+    let selectedImage = false;
+    const images = unzipSync(fullBuffer, {
+      filter: (file) => {
+        if (selectedImage || !/\.png$/i.test(file.name) || file.originalSize > NOVELAI_MAX_IMAGE_BYTES) return false;
+        selectedImage = true;
+        return true;
+      },
+    });
+    for (const bytes of Object.values(images)) {
+      const imageBytes = extractPngFromBuffer(bytes.buffer.slice(
+        bytes.byteOffset, bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer);
+      if (imageBytes) return `data:image/png;base64,${uint8ToBase64(imageBytes)}`;
+    }
+    throw new Error("NovelAI ZIP response did not contain a supported PNG image");
+  }
+
   const primaryBuffer = fullBuffer.buffer.slice(
     fullBuffer.byteOffset,
     fullBuffer.byteOffset + fullBuffer.byteLength
   ) as ArrayBuffer;
-
-  // Strategy 1: Direct PNG scan
-  let imageBytes = extractPngFromBuffer(primaryBuffer);
+  const imageBytes = extractPngFromBuffer(primaryBuffer);
   if (imageBytes) return `data:image/png;base64,${uint8ToBase64(imageBytes)}`;
 
-  // Strategy 2: ZIP archive scan
-  const pkIndex = findBytes(fullBuffer, [0x50, 0x4b, 0x03, 0x04]);
-  if (pkIndex !== -1) {
-    const zipSlice = fullBuffer.slice(pkIndex);
-    const zipBuffer = zipSlice.buffer.slice(
-      zipSlice.byteOffset,
-      zipSlice.byteOffset + zipSlice.byteLength
-    ) as ArrayBuffer;
-    imageBytes = extractPngFromBuffer(zipBuffer);
-    if (imageBytes) return `data:image/png;base64,${uint8ToBase64(imageBytes)}`;
-  }
-
-  // Strategy 3: MessagePack decode
+  // Streaming endpoints can return a sequence of MessagePack events.
   let largestBinary: Uint8Array | null = null;
   let largestSize = 0;
   let streamError: string | null = null;
@@ -430,13 +444,6 @@ function extractPngFromBuffer(buffer: ArrayBuffer): Uint8Array | null {
   }
   if (end === -1) return null;
   return bytes.slice(start, end);
-}
-
-function findBytes(haystack: Uint8Array, needle: number[]): number {
-  for (let i = 0; i <= haystack.length - needle.length; i++) {
-    if (needle.every((b, j) => haystack[i + j] === b)) return i;
-  }
-  return -1;
 }
 
 async function padDirectorRefImage(base64Data: string): Promise<string> {

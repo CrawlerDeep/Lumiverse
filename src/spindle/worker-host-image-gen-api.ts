@@ -163,6 +163,7 @@ export class WorkerHostImageGenApi {
         negativePrompt: typeof input?.negativePrompt === "string" ? input.negativePrompt : undefined,
         model: typeof input?.model === "string" && input.model ? input.model : connection.model,
         parameters,
+        connectionOptions: connection.metadata,
         signal,
       },
     };

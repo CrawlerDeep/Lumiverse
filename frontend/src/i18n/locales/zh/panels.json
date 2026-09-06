@@ -534,6 +534,8 @@
     "deleteConfirm": "删除"
   },
   "imageGenConnectionForm": {
+    "novelaiNonStreaming": "使用非流式生成",
+    "novelaiNonStreamingHint": "如果代理不支持流式图像响应，请启用此选项。",
     "setAsDefault": "设为默认图像生成连接",
     "selectModel": "选择模型...",
     "noModelsDynamic": "未找到模型。请刷新，或手动输入。",

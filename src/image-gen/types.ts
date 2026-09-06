@@ -23,6 +23,10 @@ export interface ImageGenRequest {
   negativePrompt?: string;
   model: string;
   parameters: Record<string, any>;
+  /** Transport options from the saved connection metadata, independent of generation parameters. */
+  connectionOptions?: {
+    novelai?: { nonStreaming?: boolean };
+  };
   signal?: AbortSignal;
 }
 

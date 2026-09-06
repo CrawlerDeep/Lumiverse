@@ -534,6 +534,8 @@
     "deleteConfirm": "削除"
   },
   "imageGenConnectionForm": {
+    "novelaiNonStreaming": "非ストリーミング生成を使用",
+    "novelaiNonStreamingHint": "画像レスポンスのストリーミングに対応していないプロキシで有効にします。",
     "setAsDefault": "デフォルトの画像生成接続として設定",
     "selectModel": "モデルを選択...",
     "noModelsDynamic": "モデルが見つかりません。更新するか、手動で入力してください。",
