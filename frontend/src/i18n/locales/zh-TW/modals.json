@@ -67,6 +67,10 @@
   },
   "bulkImport": {
     "complete": "導入完成",
+    "interrupted": "導入中斷",
+    "cancelled": "導入已取消",
+    "reconnecting": "正在重新連線…",
+    "incomplete": "導入已結束，但尚未處理完所有選取的檔案。",
     "importing": "正在導入角色…",
     "title": "批量導入",
     "skipDuplicates": "跳過已存在的角色（按名稱）",

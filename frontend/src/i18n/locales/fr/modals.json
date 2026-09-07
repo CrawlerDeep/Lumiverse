@@ -67,6 +67,10 @@
   },
   "bulkImport": {
     "complete": "Importation terminée",
+    "interrupted": "Importation interrompue",
+    "cancelled": "Importation annulée",
+    "reconnecting": "Reconnexion...",
+    "incomplete": "L'importation s'est arrêtée avant le traitement de tous les fichiers sélectionnés.",
     "importing": "Importation de caractères...",
     "title": "Importation groupée",
     "skipDuplicates": "Ignorer les caractères qui existent déjà (par nom)",

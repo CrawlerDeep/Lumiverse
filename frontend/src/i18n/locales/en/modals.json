@@ -70,6 +70,10 @@
   },
   "bulkImport": {
     "complete": "Import Complete",
+    "interrupted": "Import Interrupted",
+    "cancelled": "Import Cancelled",
+    "reconnecting": "Reconnecting...",
+    "incomplete": "The import ended before all selected files were processed.",
     "importing": "Importing Characters...",
     "title": "Bulk Import",
     "skipDuplicates": "Skip characters that already exist (by name)",

@@ -67,6 +67,10 @@
   },
   "bulkImport": {
     "complete": "导入完成",
+    "interrupted": "导入中断",
+    "cancelled": "导入已取消",
+    "reconnecting": "正在重新连接…",
+    "incomplete": "导入已结束，但尚未处理完所有选中的文件。",
     "importing": "正在导入角色…",
     "title": "批量导入",
     "skipDuplicates": "跳过已存在的角色（按名称）",

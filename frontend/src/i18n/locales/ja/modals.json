@@ -67,6 +67,10 @@
   },
   "bulkImport": {
     "complete": "インポート完了",
+    "interrupted": "インポート中断",
+    "cancelled": "インポートをキャンセルしました",
+    "reconnecting": "再接続中...",
+    "incomplete": "選択したすべてのファイルを処理する前にインポートが終了しました。",
     "importing": "文字をインポート中...",
     "title": "一括インポート",
     "skipDuplicates": "既存の文字を (名前で) スキップ",

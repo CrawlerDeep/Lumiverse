@@ -67,6 +67,10 @@
   },
   "bulkImport": {
     "complete": "Importazione completata",
+    "interrupted": "Importazione interrotta",
+    "cancelled": "Importazione annullata",
+    "reconnecting": "Riconnessione...",
+    "incomplete": "L'importazione è terminata prima di elaborare tutti i file selezionati.",
     "importing": "Importazione personaggi...",
     "title": "Importazione batch",
     "skipDuplicates": "Ignora personaggi che esistono già (per nome)",
