@@ -10,6 +10,8 @@ import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
 import { bindImportedRegexesToPreset } from '@/lib/loom/preset-regex-import'
 import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { beginActiveLoomPresetSelection, transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
+import { assertRenderableLoomPreset, InvalidLoomPresetError, unmarshalPresetForEditor as unmarshalPreset } from '@/lib/loom/preset-validation'
+import { findLoomPresetFallback } from '@/lib/loom/preset-recovery'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableDef, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -22,7 +24,6 @@ import {
 import {
   createNewLoomPreset,
   marshalPreset,
-  unmarshalPreset,
   detectSupportedParamsFromProviders,
   getAvailableMacros,
   exportToSTPreset,
@@ -105,6 +106,7 @@ export function useLoomBuilder() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const activePresetRef = useRef<LoomPreset | null>(null)
+  const lastGoodPresetIdRef = useRef<string | undefined>(undefined)
   const effectiveActivePreset = useMemo(() => {
     if (!activePreset || runtimePresetProfile?.presetId !== activePreset.id) return activePreset
     return {
@@ -144,27 +146,81 @@ export function useLoomBuilder() {
     if (!activeLoomPresetId) {
       activePresetRef.current = null
       setActivePreset(null)
+      setIsLoading(false)
+      setError(null)
       return
     }
     if (activePresetRef.current?.id === activeLoomPresetId) return
 
     let cancelled = false
+    const recoveryAbort = new AbortController()
+    const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+    const isCurrent = () => !cancelled
+      && useStore.getState().activeLoomPresetId === activeLoomPresetId
+      && presetSaveCoordinator.getScopeEpoch() === scopeEpoch
     setIsLoading(true)
+    setError(null)
     const hydration = presetSaveCoordinator.beginHydration(activeLoomPresetId, 'loom-editor')
     presetsApi.get(activeLoomPresetId).then((preset) => {
-      if (cancelled) {
+      if (!isCurrent()) {
         presetSaveCoordinator.cancelHydration(hydration)
         return
       }
       const loadedPreset = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
+      assertRenderableLoomPreset(loadedPreset)
+      lastGoodPresetIdRef.current = loadedPreset.id
       activePresetRef.current = loadedPreset
       setActivePreset(loadedPreset)
       setIsLoading(false)
-    }).catch((err) => {
+    }).catch(async (err) => {
       presetSaveCoordinator.cancelHydration(hydration)
-      if (cancelled) return
+      if (!isCurrent()) return
       if (err instanceof StalePresetHydrationError) {
         setIsLoading(false)
+        return
+      }
+      if (err instanceof InvalidLoomPresetError) {
+        console.warn('[LoomBuilder] Recovering malformed preset:', activeLoomPresetId, err)
+        const selection = beginActiveLoomPresetSelection({
+          signal: recoveryAbort.signal,
+          recoverFromPresetId: activeLoomPresetId,
+        })
+        try {
+          const fallback = await findLoomPresetFallback(activeLoomPresetId, lastGoodPresetIdRef.current, isCurrent)
+          if (!fallback || !isCurrent()) return
+          const restored = presetSaveCoordinator.hydrate(fallback)
+          assertRenderableLoomPreset(restored)
+          if (!(await selection.transition(restored.id))) return
+          if (useStore.getState().activeLoomPresetId !== restored.id || presetSaveCoordinator.getScopeEpoch() !== scopeEpoch) return
+          // Committing the new id may already have cleaned up this effect.
+          // The new effect owns loading, but the successful recovery still needs its registry entry and notice.
+          setLoomRegistry({
+            ...useStore.getState().loomRegistry,
+            [restored.id]: {
+              name: restored.name,
+              blockCount: restored.blocks.length,
+              coverUrl: restored.coverUrl,
+              updatedAt: restored.updatedAt,
+              isDefault: restored.isDefault,
+            },
+          })
+          toast.warning(i18n.t('loomBuilder.toast.presetRecovered', { ns: 'panels', name: restored.name }))
+          if (!cancelled) {
+            lastGoodPresetIdRef.current = restored.id
+            activePresetRef.current = restored
+            setActivePreset(restored)
+            setRuntimePresetProfile(null)
+            setError(null)
+          }
+        } catch (recoveryError) {
+          if (!isCurrent()) return
+          console.warn('[LoomBuilder] Preset recovery failed:', recoveryError)
+          setError(recoveryError instanceof Error ? recoveryError.message : String(recoveryError))
+          toast.error(i18n.t('loomBuilder.toast.presetRecoveryFailed', { ns: 'panels' }))
+        } finally {
+          selection.cancel()
+          if (!cancelled) setIsLoading(false)
+        }
         return
       }
       // Retroactive cleanup: if the persisted active preset id points at a row
@@ -186,9 +242,10 @@ export function useLoomBuilder() {
     })
     return () => {
       cancelled = true
+      recoveryAbort.abort()
       presetSaveCoordinator.cancelHydration(hydration)
     }
-  }, [activeLoomPresetId])
+  }, [activeLoomPresetId, setLoomRegistry])
 
 
   // Refresh registry from API
@@ -257,6 +314,15 @@ export function useLoomBuilder() {
     if (!activeLoomPresetId) return
     return presetSaveCoordinator.subscribe(activeLoomPresetId, (preset) => {
       if (useStore.getState().activeLoomPresetId !== preset.id) return
+      // Dirty recovery or another owner may publish data independently of an API read.
+      // Keep the last renderable editor state if that shared draft is malformed.
+      try {
+        assertRenderableLoomPreset(preset)
+      } catch (err) {
+        console.warn('[LoomBuilder] Ignoring malformed shared draft:', err)
+        return
+      }
+      lastGoodPresetIdRef.current = preset.id
       activePresetRef.current = preset
       setActivePreset(preset)
       setIsLoading(false)
@@ -300,6 +366,7 @@ export function useLoomBuilder() {
           return
         }
         const restored = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
+        assertRenderableLoomPreset(restored)
         if (activePresetRef.current?.id !== restored.id) return
         activePresetRef.current = restored
         setActivePreset(restored)
@@ -318,7 +385,11 @@ export function useLoomBuilder() {
   // All supported manual and automatic selection paths use the same
   // coordinator so the departing draft is flushed before a new id is exposed.
   const selectPreset = useCallback(async (presetId: string | null) => {
-    await transitionActiveLoomPreset(presetId)
+    try {
+      await transitionActiveLoomPreset(presetId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
   }, [])
 
   // Read activePreset through a ref so saveStructure stays reference-stable

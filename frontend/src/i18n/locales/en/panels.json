@@ -3380,6 +3380,7 @@
   "group": "Group",
   "panel": "Panel",
   "loomBuilder": {
+    "recoveryPresetName": "Recovered Loom",
     "unknownProvider": "Unknown",
     "editorTabs": {
       "ariaLabel": "Preset editor tabs",
@@ -3706,6 +3707,9 @@
     },
     "toast": {
       "exportFailed": "Failed to export preset",
+      "invalidPresetSelection": "This preset is malformed. Your current selection has been kept.",
+      "presetRecovered": "The selected preset is malformed. Switched to {{name}}. The original preset has been kept.",
+      "presetRecoveryFailed": "The selected preset is malformed and a fallback could not be loaded. Try selecting another preset.",
       "importedRegexFromPreset": "Imported {{count}} regex script from preset",
       "importedRegexFromPreset_plural": "Imported {{count}} regex scripts from preset",
       "regexImportFailed": "{{count}} regex script failed to import",
