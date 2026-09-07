@@ -27,6 +27,7 @@ import { env } from "../../../env";
 import { getDb } from "../../../db/connection";
 import { embeddingCache } from "../../embedding-cache";
 import { resolveBrokenTermuxLanceDbMirrorPath, resolveLanceDbConnectUri } from "../../../utils/lancedb-path";
+import { repairMixedLanceManifestPaths } from "../../../utils/lancedb-manifests";
 import type { WorldBookVectorIndexStatus } from "../../../types/world-book";
 import { LANCEDB_CAPABILITIES } from "../capabilities";
 import { toSimilarity } from "../addressing";
@@ -389,8 +390,9 @@ export async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
       entry.resolve = () => { clearTimeout(timer); origResolve(); };
     });
   }
-  const releaseCrossProcessLock = await acquireCrossProcessWriteLockIfNeeded();
+  let releaseCrossProcessLock: (() => void) | null = null;
   try {
+    releaseCrossProcessLock = await acquireCrossProcessWriteLockIfNeeded();
     return await fn();
   } finally {
     releaseCrossProcessLock?.();
@@ -545,11 +547,11 @@ async function waitForReadsToDrain(timeoutMs?: number): Promise<void> {
  * withWriteLock(), which serializes maintenance ops against each other so the
  * gate never has competing owners.
  */
-async function withMaintenanceExclusive<T>(fn: () => Promise<T>): Promise<T> {
+async function withMaintenanceExclusive<T>(fn: () => Promise<T>, drainAllReads = false): Promise<T> {
   let release!: () => void;
   _maintenanceGate = new Promise<void>((resolve) => { release = resolve; });
   try {
-    await waitForReadsToDrain(30_000);
+    await waitForReadsToDrain(drainAllReads ? undefined : 30_000);
     return await fn();
   } finally {
     _maintenanceGate = null;
@@ -725,6 +727,9 @@ function collectErrorMessages(err: unknown): string[] {
 }
 
 function isIncompleteEmbeddingsTableError(err: unknown, tableName: string): boolean {
+  // A manifest naming conflict is recoverable metadata, not a missing table.
+  // Never let a failed repair fall through to deleting the vector store.
+  if (err instanceof LanceManifestRecoveryError || isMixedLanceManifestError(err)) return false;
   const text = collectErrorMessages(err).join(" | ").toLowerCase();
   if (!text) return false;
   if (!text.includes(`${tableName}.lance`) && !text.includes(`table '${tableName}' was not found`)) {
@@ -974,6 +979,51 @@ async function tableExists(conn: Connection, name: string): Promise<boolean> {
   return names.includes(name);
 }
 
+function isMixedLanceManifestError(err: unknown): boolean {
+  return collectErrorMessages(err).some((message) =>
+    message.toLowerCase().includes("found multiple manifest naming schemes"),
+  );
+}
+
+class LanceManifestRecoveryError extends Error {}
+
+async function openTableWithManifestRecovery(conn: Connection, tableName: string, lockHeld: boolean): Promise<Table> {
+  try {
+    return await conn.openTable(tableName);
+  } catch (err) {
+    if (!isMixedLanceManifestError(err)) throw err;
+  }
+
+  const repairAndOpen = async (): Promise<Table> => {
+    // Another caller/process may have repaired the table while we waited.
+    // Keep its healthy cached handle alive for any callers already using it.
+    try {
+      return await conn.openTable(tableName);
+    } catch (err) {
+      if (!isMixedLanceManifestError(err)) throw err;
+    }
+    await waitForReadsToDrain();
+    const state = getTableState(tableName);
+    state.tableHandle?.close();
+    invalidateTableHandle(tableName);
+    const result = repairMixedLanceManifestPaths(join(LANCEDB_PATH, `${tableName}.lance`));
+    if (result.migrated > 0) {
+      console.info(`[embeddings] Repaired ${result.migrated} mixed LanceDB manifest name(s) for ${tableName}; originals saved at ${result.backupPath}`);
+    }
+    return await conn.openTable(tableName);
+  };
+  const repairUnderWriteLock = () => {
+    // optimize/index maintenance can reopen a table while already owning the
+    // gate. Do not replace that gate or reacquire its write lock.
+    return _maintenanceGate ? repairAndOpen() : withMaintenanceExclusive(repairAndOpen, true);
+  };
+  try {
+    return await (lockHeld ? repairUnderWriteLock() : withWriteLock(repairUnderWriteLock));
+  } catch (cause) {
+    throw new LanceManifestRecoveryError(`Unable to repair mixed LanceDB manifests for ${tableName}; vector store preserved`, { cause });
+  }
+}
+
 export async function getTableIfExists(tableName = EMBEDDINGS_TABLE, lockHeld = false): Promise<Table | null> {
   const state = getTableState(tableName);
   if (state.tableHandle) return state.tableHandle;
@@ -987,7 +1037,7 @@ export async function getTableIfExists(tableName = EMBEDDINGS_TABLE, lockHeld = 
   const exists = await tableExists(conn, tableName);
   if (!exists) return null;
   try {
-    state.tableHandle = await conn.openTable(tableName);
+    state.tableHandle = await openTableWithManifestRecovery(conn, tableName, lockHeld);
   } catch (err) {
     if (await recoverBrokenEmbeddingsTable(tableName, `opening ${tableName} table`, err, lockHeld)) {
       return null;
@@ -1008,7 +1058,7 @@ export async function getOrCreateTable(tableName = EMBEDDINGS_TABLE, seedRows?: 
   const exists = await tableExists(conn, tableName);
   if (exists) {
     try {
-      state.tableHandle = await conn.openTable(tableName);
+      state.tableHandle = await openTableWithManifestRecovery(conn, tableName, lockHeld);
       return state.tableHandle;
     } catch (err) {
       if (!(await recoverBrokenEmbeddingsTable(tableName, `opening ${tableName} before write`, err, lockHeld))) {
