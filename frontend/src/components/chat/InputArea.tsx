@@ -15,6 +15,7 @@ import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
 import { imagesApi } from '@/api/images'
+import { audioApi } from '@/api/audio'
 import { getPersonaAvatarThumbUrl, getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
@@ -1561,6 +1562,14 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     '.html', '.htm', '.yaml', '.yml', '.log', '.rst', '.rtf',
   ]), [])
 
+  const AUDIO_EXTENSIONS = useMemo(() => new Set([
+    '.mp3', '.wav', '.aif', '.aiff', '.aac', '.ogg', '.oga', '.flac',
+  ]), [])
+
+  const VIDEO_EXTENSIONS = useMemo(() => new Set([
+    '.mp4', '.mpeg', '.mpg', '.mov', '.m4v', '.avi', '.flv', '.webm', '.wmv', '.3gp',
+  ]), [])
+
   const isDocumentFile = useCallback((file: File) => {
     const ext = file.name.lastIndexOf('.') >= 0 ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : ''
     return DOCUMENT_EXTENSIONS.has(ext)
@@ -1571,8 +1580,10 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
     setUploading(true)
     try {
       for (const file of Array.from(files)) {
+        const ext = file.name.lastIndexOf('.') >= 0 ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : ''
         const isImage = file.type.startsWith('image/')
-        const isAudio = file.type.startsWith('audio/')
+        const isAudio = file.type.startsWith('audio/') || AUDIO_EXTENSIONS.has(ext)
+        const isVideo = file.type.startsWith('video/') || VIDEO_EXTENSIONS.has(ext)
         const isDoc = isDocumentFile(file)
 
         if (isDoc) {
@@ -1588,21 +1599,24 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
           continue
         }
 
-        if (!isImage && !isAudio) {
+        if (!isImage && !isAudio && !isVideo) {
           toast.error(t('toast.unsupportedFileType', { name: file.name }), { title: t('toast.uploadFailed') })
           continue
         }
 
-        // Image/audio → inline attachment as before
-        const image = await imagesApi.upload(file)
+        // Images and videos share the media pipeline (including video metadata
+        // and poster extraction); audio uses its dedicated binary store.
+        const media = isAudio
+          ? await audioApi.upload(file)
+          : await imagesApi.upload(file)
         const att: MessageAttachment & { previewUrl?: string } = {
-          type: isImage ? 'image' : 'audio',
-          image_id: image.id,
-          mime_type: file.type,
+          type: isImage ? 'image' : isAudio ? 'audio' : 'video',
+          image_id: media.id,
+          mime_type: media.mime_type,
           original_filename: file.name,
-          width: image.width ?? undefined,
-          height: image.height ?? undefined,
-          previewUrl: isImage ? imagesApi.smallUrl(image.id) : undefined,
+          width: 'width' in media ? media.width ?? undefined : undefined,
+          height: 'height' in media ? media.height ?? undefined : undefined,
+          previewUrl: isImage ? imagesApi.smallUrl(media.id) : undefined,
         }
         setPendingAttachments((prev) => [...prev, att])
       }
@@ -1613,7 +1627,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [isDocumentFile, chatId, characterName, t])
+  }, [AUDIO_EXTENSIONS, VIDEO_EXTENSIONS, isDocumentFile, chatId, characterName, t])
 
   const removeAttachment = useCallback((imageId: string) => {
     setPendingAttachments((prev) => prev.filter((a) => a.image_id !== imageId))
@@ -4299,7 +4313,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
         aria-label={t('input.attachFiles')}
         aria-hidden="true"
         tabIndex={-1}
-        accept="image/*,audio/*,.txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rst,.rtf"
+        accept="image/*,audio/wav,audio/mpeg,audio/mp3,audio/aiff,audio/aac,audio/ogg,audio/flac,video/mp4,video/mpeg,video/quicktime,video/avi,video/x-msvideo,video/x-flv,video/webm,video/x-ms-wmv,video/3gpp,.mp3,.wav,.aif,.aiff,.aac,.ogg,.oga,.flac,.mp4,.mpeg,.mpg,.mov,.m4v,.avi,.flv,.webm,.wmv,.3gp,.txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.yaml,.yml,.log,.rst,.rtf"
         multiple
         style={{ display: 'none' }}
         onChange={(e) => handleAttachFiles(e.target.files)}

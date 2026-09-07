@@ -24,6 +24,13 @@ export interface LlmAudioPart {
   cache_control?: Record<string, unknown>;
 }
 
+export interface LlmVideoPart {
+  type: "video";
+  data: string;      // base64-encoded
+  mime_type: string;  // e.g. "video/mp4", "video/webm"
+  cache_control?: Record<string, unknown>;
+}
+
 export interface LlmToolUsePart {
   type: "tool_use";
   id: string;
@@ -45,6 +52,7 @@ export type LlmMessagePart =
   | LlmTextPart
   | LlmImagePart
   | LlmAudioPart
+  | LlmVideoPart
   | LlmToolUsePart
   | LlmToolResultPart;
 
@@ -129,6 +137,9 @@ export function describeContentForDisplay(
         case "audio":
           countPart("audio");
           return `[audio: ${part.mime_type}]`;
+        case "video":
+          countPart("video");
+          return `[video: ${part.mime_type}]`;
         case "tool_use":
           countPart("tool_use");
           return `[tool_call: ${part.name}(${JSON.stringify(part.input)})]`;

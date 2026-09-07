@@ -57,7 +57,7 @@
     "switchConnectionActive": "连接：{{name}}",
     "attachFiles": "附加文件",
     "attachFile": "附加文件",
-    "attachImageOrAudio": "附加图片或音频",
+    "attachImageOrAudio": "附加图片、音频或视频",
     "removeAttachment": "移除附件",
     "message": "消息",
     "stopGeneration": "停止生成",

@@ -57,7 +57,7 @@
     "switchConnectionActive": "Connessione: {{name}}",
     "attachFiles": "Allega file",
     "attachFile": "Allega file",
-    "attachImageOrAudio": "Allega immagine o audio",
+    "attachImageOrAudio": "Allega immagine, audio o video",
     "removeAttachment": "Rimuovi allegato",
     "message": "Messaggio",
     "stopGeneration": "Ferma la generazione",

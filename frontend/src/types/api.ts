@@ -212,7 +212,7 @@ export interface CharacterTtsExtension {
 
 // ---- Message Attachment ----
 export interface MessageAttachment {
-  type: "image" | "audio";
+  type: "image" | "audio" | "video";
   image_id: string;
   mime_type: string;
   original_filename: string;

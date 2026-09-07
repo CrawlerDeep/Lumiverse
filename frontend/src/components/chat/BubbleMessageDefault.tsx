@@ -192,8 +192,8 @@ export default function BubbleMessageDefault({
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
   const messageContextMenuEnabled = useStore((s) => s.messageContextMenuEnabled ?? true)
-  // Keep a MessageAudioSlot wrapper mounted on every assistant bubble
-  // when TTS is enabled, OR whenever an audio attachment already exists.
+  // Keep a MessageAudioSlot wrapper mounted on every assistant bubble when
+  // TTS is enabled, and on either side whenever an audio attachment exists.
   // The slot itself is height-zero when no audio is attached (no wasted
   // space, no contribution to row height) and transitions smoothly to
   // its natural height when audio arrives. Always-mounted is required
@@ -211,7 +211,7 @@ export default function BubbleMessageDefault({
       a && a.type === 'audio' && (a.swipe_id === undefined || a.swipe_id === message.swipe_id),
     ) ?? null
   }, [message.extra?.attachments, message.swipe_id])
-  const renderAudioSlot = !isEditing && (ttsEnabled || !!audioAttachment) && !message.is_user
+  const renderAudioSlot = !isEditing && (!!audioAttachment || (ttsEnabled && !message.is_user))
   const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
   const cardRef = useRef<HTMLDivElement>(null)
 
@@ -242,6 +242,9 @@ export default function BubbleMessageDefault({
     confirmDelete,
     cancelDelete,
   } = useMessagePlayback(message.id, message.content, message.name, message.is_user)
+  // Uploaded user audio owns its own inline player. Do not label the message's
+  // TTS action as "regenerate" or let it replace the uploaded recording.
+  const canUseTtsAction = canPlay && (!isUser || !audioAttachment)
   const canOpenContextMenu = !isEditing && !isSelectMode && messageContextMenuEnabled
 
   const closeContextMenu = useCallback(() => setContextMenuPos(null), [])
@@ -300,7 +303,7 @@ export default function BubbleMessageDefault({
       icon: <Pencil size={14} />,
       onClick: () => contextAction(handleEdit),
     },
-    ...(canPlay ? [{
+    ...(canUseTtsAction ? [{
       key: 'play',
       label: isGenerating
         ? t('messageActions.cancelTtsGeneration')
@@ -347,7 +350,7 @@ export default function BubbleMessageDefault({
       onClick: () => contextAction(handleDelete),
     },
   ], [
-    canPlay, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
+    canUseTtsAction, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
     handlePromptBreakdown, handleToggleHidden, handleToggleContextAnchor, hasSavedAudio, isGenerating, isHidden, isContextAnchor, isPlaying, isUser,
     togglePlayback, t, tc,
   ])
@@ -517,7 +520,7 @@ export default function BubbleMessageDefault({
           onToggleContextAnchor={handleToggleContextAnchor}
           onFork={handleFork}
           onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
-          onPlay={canPlay ? togglePlayback : undefined}
+          onPlay={canUseTtsAction ? togglePlayback : undefined}
           isPlaying={isPlaying}
           isGenerating={isGenerating}
           hasSavedAudio={hasSavedAudio}

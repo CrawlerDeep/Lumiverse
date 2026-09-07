@@ -191,8 +191,8 @@ export default function MinimalMessageDefault({
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
   const messageContextMenuEnabled = useStore((s) => s.messageContextMenuEnabled ?? true)
-  // Keep a MessageAudioSlot wrapper mounted on every assistant bubble
-  // when TTS is enabled, OR whenever an audio attachment already exists.
+  // Keep a MessageAudioSlot wrapper mounted on every assistant bubble when
+  // TTS is enabled, and on either side whenever an audio attachment exists.
   // See BubbleMessageDefault for the full rationale.
   const ttsEnabled = useStore((s) => s.voiceSettings.ttsEnabled)
   // Audio is per-swipe: see BubbleMessageDefault for the full rationale.
@@ -202,7 +202,7 @@ export default function MinimalMessageDefault({
       a && a.type === 'audio' && (a.swipe_id === undefined || a.swipe_id === message.swipe_id),
     ) ?? null
   }, [message.extra?.attachments, message.swipe_id])
-  const renderAudioSlot = !isEditing && (ttsEnabled || !!audioAttachment) && !message.is_user
+  const renderAudioSlot = !isEditing && (!!audioAttachment || (ttsEnabled && !message.is_user))
   const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
 
   const cardRef = useRef<HTMLDivElement>(null)
@@ -233,6 +233,9 @@ export default function MinimalMessageDefault({
     confirmDelete,
     cancelDelete,
   } = useMessagePlayback(message.id, message.content, message.name, message.is_user)
+  // Uploaded user audio owns its own inline player. Keep the TTS action from
+  // treating that recording as generated speech that can be regenerated.
+  const canUseTtsAction = canPlay && (!isUser || !audioAttachment)
   const canOpenContextMenu = !isEditing && !isSelectMode && messageContextMenuEnabled
 
   const closeContextMenu = useCallback(() => setContextMenuPos(null), [])
@@ -291,7 +294,7 @@ export default function MinimalMessageDefault({
       icon: <Pencil size={14} />,
       onClick: () => contextAction(handleEdit),
     },
-    ...(canPlay ? [{
+    ...(canUseTtsAction ? [{
       key: 'play',
       label: isGenerating
         ? t('messageActions.cancelTtsGeneration')
@@ -338,7 +341,7 @@ export default function MinimalMessageDefault({
       onClick: () => contextAction(handleDelete),
     },
   ], [
-    canPlay, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
+    canUseTtsAction, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
     handlePromptBreakdown, handleToggleHidden, handleToggleContextAnchor, hasSavedAudio, isGenerating, isHidden, isContextAnchor, isPlaying, isUser,
     togglePlayback, t, tc,
   ])
@@ -497,7 +500,7 @@ export default function MinimalMessageDefault({
             onToggleContextAnchor={handleToggleContextAnchor}
             onFork={handleFork}
             onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
-            onPlay={canPlay ? togglePlayback : undefined}
+            onPlay={canUseTtsAction ? togglePlayback : undefined}
             isPlaying={isPlaying}
             isGenerating={isGenerating}
             hasSavedAudio={hasSavedAudio}

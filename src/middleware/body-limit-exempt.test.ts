@@ -6,6 +6,10 @@ describe("isLargeUploadBodyLimitExemptPath", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/images/wallpapers")).toBe(true);
   });
 
+  test("allows chat audio uploads through the global 10MB guard", () => {
+    expect(isLargeUploadBodyLimitExemptPath("/api/v1/audio")).toBe(true);
+  });
+
   test("allows saved theme packs with embedded assets through the global 10MB guard", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/settings/saved-themes")).toBe(true);
   });

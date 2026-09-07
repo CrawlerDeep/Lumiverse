@@ -57,7 +57,7 @@
     "switchConnectionActive": "接続: {{name}}",
     "attachFiles": "ファイルを添付",
     "attachFile": "ファイルの添付",
-    "attachImageOrAudio": "画像または音声を添付",
+    "attachImageOrAudio": "画像、音声、または動画を添付",
     "removeAttachment": "添付を削除する",
     "message": "メッセージ",
     "stopGeneration": "生成を停止",

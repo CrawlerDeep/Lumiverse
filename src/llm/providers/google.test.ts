@@ -6,6 +6,31 @@ import { GoogleProvider } from "./google";
 // {name, args}. FunctionResponse is {name, response: Record<string, unknown>}
 // where response uses "output"/"error" keys per the API docs.
 describe("GoogleProvider tool calling wire shape", () => {
+  test("serializes image, audio, and video bytes as documented inlineData parts", () => {
+    const provider = new GoogleProvider();
+    const body = (provider as any).buildBody({
+      model: "gemini-2.5-flash",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Describe these files" },
+          { type: "image", data: "IMAGE_BYTES", mime_type: "image/png" },
+          { type: "audio", data: "AUDIO_BYTES", mime_type: "audio/mpeg" },
+          { type: "video", data: "VIDEO_BYTES", mime_type: "video/quicktime" },
+        ],
+      }],
+      parameters: {},
+      tools: [],
+    });
+
+    expect(body.contents[0].parts).toEqual([
+      { text: "Describe these files" },
+      { inlineData: { mimeType: "image/png", data: "IMAGE_BYTES" } },
+      { inlineData: { mimeType: "audio/mp3", data: "AUDIO_BYTES" } },
+      { inlineData: { mimeType: "video/mov", data: "VIDEO_BYTES" } },
+    ]);
+  });
+
   test("tool_use part becomes a functionCall part on a model-role Content", () => {
     const provider = new GoogleProvider();
     const body = (provider as any).buildBody({

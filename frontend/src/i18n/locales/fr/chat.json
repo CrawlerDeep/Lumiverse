@@ -57,7 +57,7 @@
     "switchConnectionActive": "Connexion : {{name}}",
     "attachFiles": "Joindre des fichiers",
     "attachFile": "Joindre un fichier",
-    "attachImageOrAudio": "Joindre une image ou audio",
+    "attachImageOrAudio": "Joindre une image, un fichier audio ou une vidéo",
     "removeAttachment": "Supprimer la pièce jointe",
     "message": "Message",
     "stopGeneration": "Arrêter la génération",

@@ -5,6 +5,31 @@ import { GoogleVertexProvider } from "./google-vertex";
 // functionCall is {name, args}, functionResponse is {name, response} with
 // "output"/"error" keys per the docs.
 describe("GoogleVertexProvider tool calling wire shape", () => {
+  test("serializes image, audio, and video bytes as documented inlineData parts", () => {
+    const provider = new GoogleVertexProvider();
+    const body = (provider as any).buildBody({
+      model: "gemini-2.5-flash",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Describe these files" },
+          { type: "image", data: "IMAGE_BYTES", mime_type: "image/png" },
+          { type: "audio", data: "AUDIO_BYTES", mime_type: "audio/mpeg" },
+          { type: "video", data: "VIDEO_BYTES", mime_type: "video/quicktime" },
+        ],
+      }],
+      parameters: {},
+      tools: [],
+    });
+
+    expect(body.contents[0].parts).toEqual([
+      { text: "Describe these files" },
+      { inlineData: { mimeType: "image/png", data: "IMAGE_BYTES" } },
+      { inlineData: { mimeType: "audio/mp3", data: "AUDIO_BYTES" } },
+      { inlineData: { mimeType: "video/mov", data: "VIDEO_BYTES" } },
+    ]);
+  });
+
   test("hoists only the leading system prefix and preserves later placement", () => {
     const provider = new GoogleVertexProvider();
     const body = (provider as any).buildBody({

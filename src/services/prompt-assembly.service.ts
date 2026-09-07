@@ -111,6 +111,7 @@ import {
 } from "./vector-store-config.service";
 import { isWorldBookEntryVectorSearchReady } from "./world-book-vector-state";
 import * as imagesSvc from "./images.service";
+import * as audioSvc from "./audio.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
 import * as councilProfilesSvc from "./council/council-profiles.service";
 import { readCachedChatMemory } from "./chat-memory-cache.service";
@@ -892,9 +893,11 @@ function isDecorativeNewChatSeparator(text: string): boolean {
 
 async function resolveAttachmentBase64(
   userId: string,
-  imageId: string,
+  attachment: Pick<MessageAttachment, "type" | "image_id">,
 ): Promise<string | null> {
-  const filePath = await imagesSvc.getImageFilePath(userId, imageId);
+  const filePath = attachment.type === "audio"
+    ? audioSvc.getAudioFilePath(userId, attachment.image_id)
+    : await imagesSvc.getImageFilePath(userId, attachment.image_id);
   if (!filePath) return null;
   try {
     const buffer = await Bun.file(filePath).arrayBuffer();
@@ -902,6 +905,10 @@ async function resolveAttachmentBase64(
   } catch {
     return null;
   }
+}
+
+function attachmentCacheKey(attachment: Pick<MessageAttachment, "type" | "image_id">): string {
+  return `${attachment.type}:${attachment.image_id}`;
 }
 
 interface GeneratedImageContextPolicy {
@@ -943,8 +950,13 @@ function attachmentsForContext(msg: Message, policy: GeneratedImageContextPolicy
   const attachments = Array.isArray(msg.extra?.attachments)
     ? (msg.extra.attachments as MessageAttachment[])
     : [];
-  if (!msg.extra?.image_gen) return attachments;
-  return attachments.filter(
+  // Saved TTS is attached to assistant messages for playback, but it is not
+  // model input. User-uploaded audio belongs on user messages and is included.
+  const contextualAttachments = attachments.filter(
+    (att) => att?.type !== "audio" || msg.is_user,
+  );
+  if (!msg.extra?.image_gen) return contextualAttachments;
+  return contextualAttachments.filter(
     (att) => att?.type !== "image" || policy.allowedGeneratedImageIds.has(att.image_id),
   );
 }
@@ -3124,23 +3136,23 @@ export async function assemblePrompt(
       // (excludeMessageId is already filtered out at the top of assemblePrompt)
       // Pre-resolve all attachment files in parallel so the per-message loop
       // doesn't pay sequential file I/O costs per attachment.
-      const attachmentImageIds = new Set<string>();
+      const attachmentSources = new Map<string, MessageAttachment>();
       for (const msg of effectiveMessages) {
         if (msg.extra?.hidden === true) continue;
         const atts = attachmentsForContext(msg, generatedImageContextPolicy);
         for (const att of atts) {
-          if (att.image_id) attachmentImageIds.add(att.image_id);
+          if (att.image_id) attachmentSources.set(attachmentCacheKey(att), att);
         }
       }
       const attachmentCache = new Map<string, string | null>();
-      if (attachmentImageIds.size > 0) {
+      if (attachmentSources.size > 0) {
         const entries = await Promise.all(
-          [...attachmentImageIds].map(
-            async (id) =>
-              [id, await resolveAttachmentBase64(ctx.userId, id)] as const,
+          [...attachmentSources].map(
+            async ([key, attachment]) =>
+              [key, await resolveAttachmentBase64(ctx.userId, attachment)] as const,
           ),
         );
-        for (const [id, b64] of entries) attachmentCache.set(id, b64);
+        for (const [key, b64] of entries) attachmentCache.set(key, b64);
       }
 
       let historyCount = 0;
@@ -3199,7 +3211,7 @@ export async function assemblePrompt(
             parts.push({ type: "text", text: contentForPrompt });
           }
           for (const att of attachments) {
-            const b64 = attachmentCache.get(att.image_id) ?? null;
+            const b64 = attachmentCache.get(attachmentCacheKey(att)) ?? null;
             if (!b64) continue;
             if (att.type === "image") {
               parts.push({
@@ -3210,6 +3222,12 @@ export async function assemblePrompt(
             } else if (att.type === "audio") {
               parts.push({
                 type: "audio",
+                data: b64,
+                mime_type: att.mime_type,
+              });
+            } else if (att.type === "video") {
+              parts.push({
+                type: "video",
                 data: b64,
                 mime_type: att.mime_type,
               });
@@ -8052,22 +8070,22 @@ async function legacyAssembly(
     userId ? settingsSvc.getSetting(userId, "imageGeneration")?.value : null,
     messages,
   );
-  const legacyAttachmentIds = new Set<string>();
+  const legacyAttachmentSources = new Map<string, MessageAttachment>();
   for (const m of messages) {
     if (m.extra?.hidden === true) continue;
     const atts = attachmentsForContext(m, legacyGeneratedImageContextPolicy);
     for (const att of atts) {
-      if (att.image_id) legacyAttachmentIds.add(att.image_id as string);
+      if (att.image_id) legacyAttachmentSources.set(attachmentCacheKey(att), att);
     }
   }
   const legacyAttachmentCache = new Map<string, string | null>();
-  if (legacyAttachmentIds.size > 0 && userId) {
+  if (legacyAttachmentSources.size > 0 && userId) {
     const entries = await Promise.all(
-      [...legacyAttachmentIds].map(
-        async (id) => [id, await resolveAttachmentBase64(userId, id)] as const,
+      [...legacyAttachmentSources].map(
+        async ([key, attachment]) => [key, await resolveAttachmentBase64(userId, attachment)] as const,
       ),
     );
-    for (const [id, b64] of entries) legacyAttachmentCache.set(id, b64);
+    for (const [key, b64] of entries) legacyAttachmentCache.set(key, b64);
   }
 
   const legacyFirstChatIdx = llmMessages.length;
@@ -8094,12 +8112,14 @@ async function legacyAssembly(
       }
       for (const att of attachments) {
         if (!att.image_id || !userId) continue;
-        const b64 = legacyAttachmentCache.get(att.image_id as string) ?? null;
+        const b64 = legacyAttachmentCache.get(attachmentCacheKey(att)) ?? null;
         if (!b64) continue;
         if (att.type === "image") {
           parts.push({ type: "image", data: b64, mime_type: att.mime_type });
         } else if (att.type === "audio") {
           parts.push({ type: "audio", data: b64, mime_type: att.mime_type });
+        } else if (att.type === "video") {
+          parts.push({ type: "video", data: b64, mime_type: att.mime_type });
         }
       }
       llmMessages.push(

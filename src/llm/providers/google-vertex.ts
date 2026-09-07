@@ -11,6 +11,7 @@ import {
   GOOGLE_SEARCH_PARAMETERS,
 } from "./google-search";
 import { splitLeadingSystemMessagePrefix } from "../system-message-prefix";
+import { normalizeGoogleMediaMimeType } from "./google-media";
 
 // ── Service account JWT → OAuth2 access token ──────────────────────────────
 
@@ -514,7 +515,13 @@ export class GoogleVertexProvider implements LlmProvider {
           };
         case "image":
         case "audio":
-          return { inlineData: { mimeType: part.mime_type, data: part.data } };
+        case "video":
+          return {
+            inlineData: {
+              mimeType: normalizeGoogleMediaMimeType(part.mime_type),
+              data: part.data,
+            },
+          };
         case "tool_use":
           return { functionCall: { name: part.name, args: part.input }, thoughtSignature: part.thought_signature || "context_engineering_is_the_way_to_go" };
         case "tool_result": {

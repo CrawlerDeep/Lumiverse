@@ -17,6 +17,7 @@ export function isLargeUploadBodyLimitExemptPath(path: string): boolean {
     path.startsWith("/api/v1/world-books/import") ||
     path === "/api/v1/images" ||
     path === "/api/v1/images/wallpapers" ||
+    path === "/api/v1/audio" ||
     path === "/api/v1/theme-assets" ||
     path === "/api/v1/settings/saved-themes" ||
     path === "/api/v1/notification-sounds/completion" ||

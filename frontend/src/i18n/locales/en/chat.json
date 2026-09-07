@@ -82,7 +82,7 @@
     "switchConnectionActive": "Connection: {{name}}",
     "attachFiles": "Attach files",
     "attachFile": "Attach file",
-    "attachImageOrAudio": "Attach image or audio",
+    "attachImageOrAudio": "Attach image, audio, or video",
     "dropToAttach": "Drop files to attach",
     "removeAttachment": "Remove attachment",
     "message": "Message",

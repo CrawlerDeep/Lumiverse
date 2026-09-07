@@ -268,9 +268,15 @@ const MIME_BY_EXT: Record<string, string> = {
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
   ".mp4": "video/mp4",
+  ".mpeg": "video/mpeg",
+  ".mpg": "video/mpg",
   ".webm": "video/webm",
   ".mov": "video/quicktime",
   ".m4v": "video/x-m4v",
+  ".avi": "video/x-msvideo",
+  ".flv": "video/x-flv",
+  ".wmv": "video/x-ms-wmv",
+  ".3gp": "video/3gpp",
 };
 
 function inferUploadMimeType(file: File): string {
