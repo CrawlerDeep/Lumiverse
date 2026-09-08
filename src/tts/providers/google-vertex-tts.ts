@@ -13,6 +13,7 @@ import {
   GOOGLE_TTS_VOICES,
   buildGeminiTtsBody,
   extractGeminiTtsAudio,
+  isTtsModelId,
 } from "./google-tts-shared";
 
 /**
@@ -31,7 +32,7 @@ export class GoogleVertexTtsProvider implements TtsProvider {
     apiKeyRequired: true, // Service account JSON, like the Vertex text connection
     voiceListStyle: "static",
     staticVoices: GOOGLE_TTS_VOICES,
-    modelListStyle: "static",
+    modelListStyle: "dynamic",
     staticModels: GOOGLE_TTS_MODELS,
     supportsStreaming: false,
     supportedFormats: ["wav"],
@@ -96,8 +97,35 @@ export class GoogleVertexTtsProvider implements TtsProvider {
     }
   }
 
-  async listModels(_apiKey: string, _apiUrl: string): Promise<Array<{ id: string; label: string }>> {
-    return this.capabilities.staticModels || [];
+  async listModels(apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>> {
+    // Live TTS-only listing with a static fallback, so new speech models
+    // appear without a Lumiverse update.
+    try {
+      const sa = parseServiceAccount(apiKey);
+      const accessToken = await getAccessToken(sa);
+      const { host } = this.resolveProject(apiKey, apiUrl);
+      const seen = new Set<string>();
+      let pageToken = "";
+      do {
+        const params = new URLSearchParams({ pageSize: "100" });
+        if (pageToken) params.set("pageToken", pageToken);
+        const res = await fetch(`${host}/v1beta1/publishers/google/models?${params}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) return this.capabilities.staticModels || [];
+        const data = await res.json();
+        const models: any[] = data.publisherModels || data.models || [];
+        for (const m of models) {
+          const id = String(m.name || "").replace(/^publishers\/google\/models\//, "");
+          if (id && isTtsModelId(id)) seen.add(id);
+        }
+        pageToken = data.nextPageToken || "";
+      } while (pageToken);
+      if (seen.size === 0) return this.capabilities.staticModels || [];
+      return [...seen].sort().map((id) => ({ id, label: id }));
+    } catch {
+      return this.capabilities.staticModels || [];
+    }
   }
 
   async listVoices(_apiKey: string, _apiUrl: string): Promise<TtsVoice[]> {

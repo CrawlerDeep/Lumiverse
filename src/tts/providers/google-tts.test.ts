@@ -10,11 +10,25 @@ describe("Google TTS providers", () => {
   const studio = new GoogleTtsProvider();
   const vertex = new GoogleVertexTtsProvider();
 
-  test("TTS-only model lists", async () => {
+  test("TTS-only model lists with static fallback", async () => {
+    (globalThis as any).fetch = async () => new Response("nope", { status: 500 });
     for (const p of [studio, vertex]) {
-      expect((await p.listModels("", "")).map((m) => m.id)).toEqual(GOOGLE_TTS_MODELS.map((m) => m.id));
+      const ids = (await p.listModels("", "")).map((m) => m.id);
+      expect(ids).toEqual(GOOGLE_TTS_MODELS.map((m) => m.id));
+      expect(ids).toContain("gemini-3.1-flash-tts-preview");
       for (const m of GOOGLE_TTS_MODELS) expect(m.id.toLowerCase()).toContain("tts");
     }
+  });
+
+  test("live model listing keeps TTS models only", async () => {
+    (globalThis as any).fetch = async () =>
+      new Response(JSON.stringify({ models: [
+        { name: "models/gemini-2.0-flash" },
+        { name: "models/gemini-2.5-flash-preview-tts" },
+        { name: "models/gemini-3.1-flash-tts-preview" },
+      ] }));
+    const ids = (await studio.listModels("k", "")).map((m) => m.id);
+    expect(ids).toEqual(["gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"]);
   });
 
   test("voice mapping is non-empty, unique, and gendered", async () => {

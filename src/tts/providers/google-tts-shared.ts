@@ -2,9 +2,15 @@ import type { TtsRequest } from "../types";
 
 /** Gemini text-to-speech models. TTS-only list: no text/generation models. */
 export const GOOGLE_TTS_MODELS = [
-  { id: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash TTS (fast)" },
+  { id: "gemini-3.1-flash-tts-preview", label: "Gemini 3.1 Flash TTS (latest)" },
   { id: "gemini-2.5-pro-preview-tts", label: "Gemini 2.5 Pro TTS (high quality)" },
+  { id: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash TTS (fast)" },
 ];
+
+/** Keep a model ID only when it names a speech/TTS model. */
+export function isTtsModelId(id: string): boolean {
+  return /(?:^|[-_./: ])(tts|speech)(?:$|[-_./: ])/i.test(id);
+}
 
 /**
  * Prebuilt Gemini voices, mapped to readable names with documented gender.

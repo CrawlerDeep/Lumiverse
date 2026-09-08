@@ -3,11 +3,12 @@ import type { TtsProviderCapabilities } from "../param-schema";
 import type { TtsRequest, TtsResponse, TtsStreamChunk, TtsVoice } from "../types";
 import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 import {
-  GOOGLE_TTS_MODELS,
+  GOOGLE_TTS_MODELS as GOOGLE_TTS_FALLBACK_MODELS,
   GOOGLE_TTS_PARAMETERS,
   GOOGLE_TTS_VOICES,
   buildGeminiTtsBody,
   extractGeminiTtsAudio,
+  isTtsModelId,
 } from "./google-tts-shared";
 
 /**
@@ -23,8 +24,8 @@ export class GoogleTtsProvider implements TtsProvider {
     apiKeyRequired: true,
     voiceListStyle: "static",
     staticVoices: GOOGLE_TTS_VOICES,
-    modelListStyle: "static",
-    staticModels: GOOGLE_TTS_MODELS,
+    modelListStyle: "dynamic",
+    staticModels: GOOGLE_TTS_FALLBACK_MODELS,
     supportsStreaming: false,
     supportedFormats: ["wav"],
     defaultUrl: "https://generativelanguage.googleapis.com",
@@ -83,8 +84,22 @@ export class GoogleTtsProvider implements TtsProvider {
     }
   }
 
-  async listModels(_apiKey: string, _apiUrl: string): Promise<Array<{ id: string; label: string }>> {
-    return this.capabilities.staticModels || [];
+  async listModels(apiKey: string, apiUrl: string): Promise<Array<{ id: string; label: string }>> {
+    // Live TTS-only listing with a static fallback, so new speech models
+    // appear without a Lumiverse update.
+    try {
+      const res = await fetch(`${this.baseUrl(apiUrl)}/v1beta/models?pageSize=100&key=${encodeURIComponent(apiKey)}`);
+      if (!res.ok) return this.capabilities.staticModels || [];
+      const data = await res.json();
+      const models: any[] = data.models || [];
+      const ids = models
+        .map((m: any) => String(m.name || "").replace(/^models\//, ""))
+        .filter((id) => id && isTtsModelId(id));
+      if (ids.length === 0) return this.capabilities.staticModels || [];
+      return [...new Set(ids)].sort().map((id) => ({ id, label: id }));
+    } catch {
+      return this.capabilities.staticModels || [];
+    }
   }
 
   async listVoices(_apiKey: string, _apiUrl: string): Promise<TtsVoice[]> {
