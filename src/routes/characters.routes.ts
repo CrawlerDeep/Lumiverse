@@ -17,6 +17,7 @@ import {
   type ChubExpressionAsset,
 } from "../services/chub-api.service";
 import * as exprSvc from "../services/expressions.service";
+import { queueChubExpressionImport } from "../services/chub-expression-import.service";
 import * as settingsSvc from "../services/settings.service";
 import { fetchBotBooruGalleryUrls } from "../services/botbooru-api.service";
 import { parsePagination } from "../services/pagination";
@@ -293,31 +294,7 @@ async function importChubExpressions(
   characterId: string,
   assets: ChubExpressionAsset[],
 ): Promise<void> {
-  const downloaded = await mapWithConcurrency(
-    assets,
-    6,
-    async (asset): Promise<{ label: string; file: File } | null> => {
-      try {
-        const res = await safeFetch(asset.url, { timeoutMs: 15_000, maxBytes: 50 * 1024 * 1024 });
-        if (!res.ok) return null;
-        const buf = await res.arrayBuffer();
-        const contentType = res.headers.get("content-type") || "image/png";
-        const ext = contentType.includes("webp")
-          ? "webp"
-          : contentType.includes("jpeg") || contentType.includes("jpg")
-            ? "jpg"
-            : "png";
-        // The filename is incidental — importFromAssets keys on the label.
-        return { label: asset.label, file: new File([buf], `${asset.label}.${ext}`, { type: contentType }) };
-      } catch {
-        return null;
-      }
-    },
-  );
-
-  const resolved = downloaded.filter((entry): entry is { label: string; file: File } => entry !== null);
-  if (resolved.length === 0) return;
-  await exprSvc.importFromAssets(userId, characterId, resolved);
+  await queueChubExpressionImport(userId, characterId, assets);
 }
 
 async function fetchChubCharacter(chubPath: string, userId: string, libraryScope: CharacterLibraryScope) {

@@ -68,8 +68,9 @@ export default function ChubExpressionBackfillBanner() {
     setProgress(0)
     const updated: Array<{ name: string; imported: number }> = []
     const failedNames: string[] = []
-    // Sequential on purpose: each card pulls a full pack, and the server
-    // already parallelises the images within one card.
+    // Sequential on purpose: the server queues packs and downloads each one in
+    // bounded batches, so this loop should not manufacture a large request
+    // backlog that could outlive the browser session.
     for (const [index, candidate] of candidates.entries()) {
       try {
         const result = await charactersApi.fetchChubExpressions(candidate.id)

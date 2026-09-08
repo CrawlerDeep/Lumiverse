@@ -1,6 +1,6 @@
 import { unzipSync } from "fflate";
 import { getCharacter, updateCharacter } from "./characters.service";
-import { uploadImage } from "./images.service";
+import { uploadImage, uploadImages } from "./images.service";
 import type { Character } from "../types/character";
 
 // Cap on the total bytes produced by expression ZIP decompression. fflate's
@@ -183,13 +183,89 @@ export async function importFromAssets(
 
   const config: ExpressionConfig = {
     enabled: Object.keys(newMappings).length > 0,
-    defaultExpression: existing.defaultExpression || "default" in newMappings
-      ? "default"
-      : Object.keys(newMappings)[0] || "",
+    defaultExpression: existing.defaultExpression
+      || ("default" in newMappings ? "default" : Object.keys(newMappings)[0] || ""),
     mappings: newMappings,
   };
 
   return saveConfig(userId, characterId, config);
+}
+
+export interface ExpressionImageData {
+  label: string;
+  data: Uint8Array;
+  filename: string;
+  mimeType: string;
+}
+
+export interface ExpressionImageDataImportResult {
+  config: ExpressionConfig;
+  importedLabels: string[];
+  failed: number;
+}
+
+/**
+ * Persist one bounded batch of already-downloaded expression images.
+ *
+ * `uploadImages` writes the originals in a batch and puts every eligible image
+ * on the standard deferred metadata/thumbnail queue. In particular, this must
+ * not call Sharp directly: remote expression packs can contain hundreds of
+ * images, and request-local thumbnail fan-out can exhaust small hosts.
+ */
+export async function importFromImageData(
+  userId: string,
+  characterId: string,
+  assets: readonly ExpressionImageData[],
+): Promise<ExpressionImageDataImportResult> {
+  const existing = getExpressionConfig(userId, characterId) ?? { ...EMPTY_CONFIG };
+  if (assets.length === 0) {
+    return { config: existing, importedLabels: [], failed: 0 };
+  }
+
+  const results = await uploadImages(
+    userId,
+    assets.map((asset) => ({
+      data: asset.data,
+      filename: asset.filename,
+      mime_type: asset.mimeType,
+      owner_character_id: characterId,
+    })),
+    {
+      // Disk writes are cheap, but keeping this below the download batch size
+      // avoids multiplying live references to large remote response buffers.
+      concurrency: 2,
+      deferProcessing: true,
+    },
+  );
+
+  const newMappings: Record<string, string> = { ...existing.mappings };
+  const importedLabels: string[] = [];
+  let failed = 0;
+  for (let i = 0; i < assets.length; i++) {
+    const image = results[i]?.image;
+    if (!image) {
+      failed++;
+      continue;
+    }
+    newMappings[assets[i]!.label] = image.id;
+    importedLabels.push(assets[i]!.label);
+  }
+
+  if (importedLabels.length === 0) {
+    return { config: existing, importedLabels, failed };
+  }
+
+  const config: ExpressionConfig = {
+    enabled: existing.enabled || Object.keys(newMappings).length > 0,
+    defaultExpression: existing.defaultExpression
+      || ("default" in newMappings ? "default" : Object.keys(newMappings)[0] || ""),
+    mappings: newMappings,
+  };
+  return {
+    config: saveConfig(userId, characterId, config),
+    importedLabels,
+    failed,
+  };
 }
 
 export function getExpressionLabels(userId: string, characterId: string): string[] {
