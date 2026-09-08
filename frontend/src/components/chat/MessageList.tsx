@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, memo, type PointerEvent, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, memo, type CSSProperties, type PointerEvent, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer, defaultRangeExtractor, type Range, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
 import {
@@ -1864,6 +1864,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
             <VirtualRow
               key={virtualRow.key}
               virtualIndex={virtualRow.index}
+              estimatedHeight={virtualRow.size}
               itemType={item.type}
               messageIndex={messageIndex}
               messageId={messageId}
@@ -1883,6 +1884,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
 
 interface VirtualRowProps {
   virtualIndex: number
+  estimatedHeight: number
   itemType: VirtualListItem['type']
   messageIndex?: number
   messageId?: string
@@ -1892,7 +1894,7 @@ interface VirtualRowProps {
   children: ReactNode
 }
 
-const VirtualRow = memo(function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKey, styleMode, measureElement, children }: VirtualRowProps) {
+const VirtualRow = memo(function VirtualRow({ virtualIndex, estimatedHeight, itemType, messageIndex, messageId, measureKey, styleMode, measureElement, children }: VirtualRowProps) {
   const elRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -1942,6 +1944,7 @@ const VirtualRow = memo(function VirtualRow({ virtualIndex, itemType, messageInd
       data-measure-key={measureKey}
       data-style-mode={relaxed ? 'extension-relaxed' : undefined}
       className={styles.virtualRow}
+      style={{ '--message-row-estimated-height': `${estimatedHeight}px` } as CSSProperties}
     >
       {messageId && (
         <span

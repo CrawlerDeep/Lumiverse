@@ -30,7 +30,7 @@ import {
 } from '@/lib/message-content-layout'
 import { useStore } from '@/store'
 import i18n from '@/i18n'
-import { useDisplayRegex } from '@/hooks/useDisplayRegex'
+import { useDisplayRegexState } from '@/hooks/useDisplayRegex'
 import {
   getLongMessageCollapseHeight,
   isLongMessageCollapseEligible,
@@ -1531,7 +1531,9 @@ export default function MessageContent({
       : undefined),
     [messageId, chatId, isUser],
   )
-  const regexAppliedContent = useDisplayRegex(interceptorCleanedContent, isUser, depth, macroCtx, preprocessOpts, isStreaming)
+  const { content: regexAppliedContent, pending: displayPending } = useDisplayRegexState(
+    interceptorCleanedContent, isUser, depth, macroCtx, preprocessOpts, isStreaming,
+  )
 
   const risuResolvedContent = useMemo(
     () => {
@@ -2172,6 +2174,7 @@ export default function MessageContent({
     <>
       <div
         data-component="MessageContent"
+        data-display-pending={!isStreaming && displayPending || undefined}
         ref={containerRef}
         className={clsx(styles.content, isUser ? styles.contentUser : styles.contentChar)}
       >

@@ -318,6 +318,7 @@ mock.module('@/hooks/useDisplayRegex', () => ({
   invalidateDisplayRegexCacheForMessage() {},
   invalidateDisplayRegexCacheForVars() {},
   useDisplayRegex: (content: string) => content,
+  useDisplayRegexState: (content: string) => ({ content, pending: false }),
 }))
 mock.module('./message-widgets', () => ({
   SpindleMessageWidgets: () => null,

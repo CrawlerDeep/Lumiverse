@@ -604,13 +604,20 @@ export function resetDisplayRegexCachesForTests(): void {
 }
 
 export function useDisplayRegex(
+  ...args: Parameters<typeof useDisplayRegexState>
+): string {
+  return useDisplayRegexState(...args).content
+}
+
+/** Expose provisional first-pass content so virtual rows can reserve their height. */
+export function useDisplayRegexState(
   rawContent: string,
   isUser: boolean,
   depth: number,
   macroCtx?: DisplayMacroContext,
   preprocessOpts?: DisplayPreprocessOpts,
   isStreaming = false,
-): string {
+): { content: string; pending: boolean } {
   const regexScripts = useStore((s) => s.regexScripts)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
@@ -937,15 +944,18 @@ export function useDisplayRegex(
   const live = passthrough ? content : cachedResolvedContent
     ?? (resolvedContentState?.key === contentCacheKey && resolvedContentState.version === version
       ? resolvedContentState.value : undefined)
+  const pending = !preprocessSettled || (
+    templateCacheKey !== null && !cachedTemplates && resolvedTemplatesState?.key !== templateCacheKey
+  )
   if (live !== undefined) {
     carry.current = { key: contentCacheKey ?? '', version, content, value: live }
     // Finalization may still need a second pass after preprocessing settles.
     if (!isStreaming && preprocessSettled) lifecycle.current.finishing = false
-    return live
+    return { content: live, pending }
   }
   if (carry.current && (
     isStreaming || lifecycle.current.finishing
     || carry.current.content === content || RAW_MACRO_RE.test(content)
-  )) return carry.current.value
-  return content
+  )) return { content: carry.current.value, pending: false }
+  return { content, pending: pending || contentCacheKey !== null }
 }

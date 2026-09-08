@@ -19,6 +19,7 @@ interface HarnessProps {
   content: string
   identity?: Identity
   isStreaming: boolean
+  onCommit?: (state: { content: string; pending: boolean }) => void
 }
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -137,13 +138,13 @@ mock.module('@/i18n', () => ({ default: { t: (key: string) => key } }))
 const {
   invalidateDisplayRegexCache,
   resetDisplayRegexCachesForTests,
-  useDisplayRegex,
+  useDisplayRegexState,
 } = await import('./useDisplayRegex')
-const { act, createElement, StrictMode } = await import('react')
+const { act, createElement, StrictMode, useLayoutEffect } = await import('react')
 const { createRoot } = await import('react-dom/client')
 
-function Harness({ content, identity, isStreaming }: HarnessProps) {
-  const rendered = useDisplayRegex(
+function Harness({ content, identity, isStreaming, onCommit }: HarnessProps) {
+  const rendered = useDisplayRegexState(
     content,
     false,
     0,
@@ -157,7 +158,8 @@ function Harness({ content, identity, isStreaming }: HarnessProps) {
       : undefined,
     isStreaming,
   )
-  return createElement('output', null, rendered)
+  useLayoutEffect(() => { onCommit?.(rendered) })
+  return createElement('output', { 'data-pending': rendered.pending }, rendered.content)
 }
 
 function readRendered(host: HTMLDivElement): string {
@@ -247,6 +249,86 @@ afterAll(() => {
 })
 
 describe('useDisplayRegex resolver lifecycle', () => {
+  test('a cold virtual row stays provisional through preprocessing and HTML replacement', async () => {
+    const { host, root } = await createHarness()
+    const identity = { chatId: 'chat-virtual', messageId: 'message-virtual' }
+    const content = 'chunk virtual'
+    holdPreprocess(content)
+    try {
+      await renderWhilePreprocessPending(root, { content, identity, isStreaming: false })
+      expect(host.querySelector('output')?.dataset.pending).toBe('true')
+      expect(applyDisplayRegexTiered).not.toHaveBeenCalled()
+
+      await releasePreprocess(content)
+      await waitForPending(content)
+      expect(host.querySelector('output')?.dataset.pending).toBe('true')
+
+      await settle(content, '<div style="height:800px">Replacement</div>')
+      expect(host.querySelector('output')?.dataset.pending).toBe('false')
+      expect(readRendered(host)).toBe('<div style="height:800px">Replacement</div>')
+    } finally {
+      await destroyHarness(host, root)
+    }
+  })
+
+  test('a virtual remount commits cached HTML immediately without a provisional raw frame', async () => {
+    const { host, root } = await createHarness()
+    const props = {
+      content: 'chunk remount',
+      identity: { chatId: 'chat-remount', messageId: 'message-remount' },
+      isStreaming: false,
+    }
+    const html = '<div style="height:800px">Cached replacement</div>'
+    try {
+      await render(root, props)
+      await settle(props.content, html)
+      await act(async () => { root.render(null) })
+
+      const commits: Array<{ content: string; pending: boolean }> = []
+      await act(async () => {
+        root.render(createElement(Harness, { ...props, onCommit: (state) => commits.push(state) }))
+      })
+      expect(commits.length).toBeGreaterThan(0)
+      expect(commits.every((state) => state.content === html && !state.pending)).toBe(true)
+      expect(applyDisplayRegexTiered).toHaveBeenCalledTimes(1)
+    } finally {
+      await destroyHarness(host, root)
+    }
+  })
+
+  test('an idle cache invalidation keeps resolved HTML visible during refresh', async () => {
+    const { host, root } = await createHarness()
+    const identity = { chatId: 'chat-refresh', messageId: 'message-refresh' }
+    try {
+      await render(root, { content: 'chunk refresh', identity, isStreaming: false })
+      await settle('chunk refresh', '<div>Original replacement</div>')
+      await act(async () => { invalidateDisplayRegexCache() })
+      await waitForPending('chunk refresh')
+      expect(host.querySelector('output')?.dataset.pending).toBe('false')
+      expect(readRendered(host)).toBe('<div>Original replacement</div>')
+      await settle('chunk refresh', '<div>Refreshed replacement</div>')
+      expect(host.querySelector('output')?.dataset.pending).toBe('false')
+      expect(readRendered(host)).toBe('<div>Refreshed replacement</div>')
+    } finally {
+      await destroyHarness(host, root)
+    }
+  })
+
+  test('a failed regex pass releases the reserved row with fallback text', async () => {
+    const { host, root } = await createHarness()
+    applyDisplayRegexTiered.mockImplementationOnce(() => Promise.reject(new Error('resolver unavailable')))
+    try {
+      await act(async () => {
+        root.render(createElement(Harness, { content: 'chunk failure', isStreaming: false }))
+      })
+      await flushReact()
+      expect(host.querySelector('output')?.dataset.pending).toBe('false')
+      expect(readRendered(host)).toBe('chunk failure')
+    } finally {
+      await destroyHarness(host, root)
+    }
+  })
+
   test('StrictMode effect replay still resolves the mounted message', async () => {
     const { host, root } = await createHarness()
     try {
