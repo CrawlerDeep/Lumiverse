@@ -85,6 +85,14 @@ export const auth = betterAuth({
     minPasswordLength: 8,
     maxPasswordLength: 128,
   },
+  // Sessions are sliding: active clients renew after one day and remain
+  // signed in for seven days after their latest renewal. requireAuth forwards
+  // Better Auth's replacement cookie so the browser lifetime stays aligned
+  // with the renewed database row.
+  session: {
+    expiresIn: 7 * 24 * 60 * 60,
+    updateAge: 24 * 60 * 60,
+  },
   plugins: [
     username({
       usernameNormalization: (u) => u.toLowerCase(),
