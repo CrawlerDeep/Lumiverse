@@ -33,6 +33,8 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
   const [defaultParameters, setDefaultParameters] = useState<Record<string, any>>(profile?.default_parameters || {})
 
   const isVertex = provider === 'google_vertex_tts'
+  const isGoogle = isVertex || provider === 'google_tts'
+  const googleUseStreaming = defaultParameters.use_streaming_endpoint !== false
   const [vertexRegion, setVertexRegion] = useState(profile?.metadata?.vertex_region || 'us-central1')
   const [saFileName, setSaFileName] = useState<string | null>(profile?.metadata?.sa_file_name || null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -198,6 +200,18 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
     })
   }, [])
 
+  const setGoogleUseStreaming = useCallback((next: boolean) => {
+    setDefaultParameters((prev) => {
+      const updated = { ...prev }
+      if (next) {
+        delete updated.use_streaming_endpoint
+      } else {
+        updated.use_streaming_endpoint = false
+      }
+      return updated
+    })
+  }, [])
+
   const setQwenUseStreaming = useCallback((next: boolean) => {
     setDefaultParameters((prev) => {
       const updated = { ...prev }
@@ -230,6 +244,12 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
     if (isQwen && defaultParameters.use_streaming_endpoint === false) {
       qwenDefaults.use_streaming_endpoint = false
     }
+    const googleDefaults: Record<string, any> = { ...defaultParameters }
+    if (defaultParameters.use_streaming_endpoint === false) {
+      googleDefaults.use_streaming_endpoint = false
+    } else {
+      delete googleDefaults.use_streaming_endpoint
+    }
     onSave({
       name: name.trim(),
       provider,
@@ -238,10 +258,10 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
       model: model.trim() || undefined,
       voice: voice.trim() || undefined,
       is_default: isDefault,
-      default_parameters: isQwen ? qwenDefaults : undefined,
+      default_parameters: isQwen ? qwenDefaults : isGoogle ? (Object.keys(googleDefaults).length > 0 ? googleDefaults : undefined) : undefined,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     })
-  }, [name, provider, apiKey, apiUrl, model, voice, isDefault, isQwen, defaultParameters, onSave, isVertex, vertexRegion, saFileName, profile?.metadata])
+  }, [name, provider, apiKey, apiUrl, model, voice, isDefault, isQwen, isGoogle, defaultParameters, onSave, isVertex, vertexRegion, saFileName, profile?.metadata])
 
   return (
     <div className={styles.form}>
@@ -347,6 +367,17 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
           emptyMessage={t('ttsConnectionForm.noVoices')}
         />
       </FormField>
+
+      {isGoogle && (
+        <FormField label="">
+          <Toggle.Checkbox
+            checked={googleUseStreaming}
+            onChange={setGoogleUseStreaming}
+            label={t('ttsConnectionForm.qwenUseStreaming')}
+            hint={t('ttsConnectionForm.qwenUseStreamingHint')}
+          />
+        </FormField>
+      )}
 
       {isQwen && (
         <>

@@ -163,4 +163,72 @@ describe("Google TTS providers", () => {
       metadata: {},
     })).toBe("https://api.openai.com/v1");
   });
+  test("Vertex streams audio chunks via streamGenerateContent SSE", async () => {
+    const keyPair = await crypto.subtle.generateKey(
+      { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+      true, ["sign"],
+    );
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", keyPair.privateKey));
+    let pemBody = "";
+    const b64 = Buffer.from(pkcs8).toString("base64");
+    for (let i = 0; i < b64.length; i += 64) pemBody += b64.slice(i, i + 64) + "\n";
+    const sa = JSON.stringify({
+      type: "service_account", project_id: "stream-proj", private_key_id: "k1",
+      private_key: `-----BEGIN PRIVATE KEY-----\n${pemBody}-----END PRIVATE KEY-----\n`,
+      client_email: "s@b.iam.gserviceaccount.com", token_uri: "https://oauth.test/token",
+    });
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const sseBody = [
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcmB64("chunk-1") } }] } }] })}\n\n`,
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcmB64("chunk-2") } }] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+
+    (globalThis as any).fetch = async (input: any, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      if (String(input).includes("oauth.test")) {
+        return new Response(JSON.stringify({ access_token: "stream-token", expires_in: 3600 }));
+      }
+      return new Response(sseBody, { headers: { "content-type": "text/event-stream" } });
+    };
+
+    const chunks: any[] = [];
+    for await (const chunk of vertex.synthesizeStream(sa, "https://us-central1-aiplatform.googleapis.com", {
+      text: "stream this", model: "gemini-2.5-flash-preview-tts", voice: "Kore", parameters: {},
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(calls[1].url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/stream-proj/locations/us-central1/publishers/google/models/gemini-2.5-flash-preview-tts:streamGenerateContent?alt=sse");
+    expect((calls[1].init?.headers as any).Authorization).toBe("Bearer stream-token");
+    expect(chunks.length).toBe(3);
+    expect(chunks[0].done).toBe(false);
+    expect(chunks[0].kind).toBe("audio_file");
+    expect(chunks[0].mimeType).toBe("audio/wav");
+    expect(wavText(chunks[0].data.buffer)).toBe("chunk-1");
+    expect(wavText(chunks[1].data.buffer)).toBe("chunk-2");
+    expect(chunks[2].done).toBe(true);
+  });
+
+  test("AI Studio streams audio chunks via streamGenerateContent SSE", async () => {
+    const sseBody = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: pcmB64("studio-stream") } }] } }] })}\n\n`;
+    const calls: string[] = [];
+    (globalThis as any).fetch = async (input: any) => {
+      calls.push(String(input));
+      return new Response(sseBody, { headers: { "content-type": "text/event-stream" } });
+    };
+
+    const chunks: any[] = [];
+    for await (const chunk of studio.synthesizeStream("my-api-key", "", {
+      text: "hello", model: "gemini-3.1-flash-tts-preview", voice: "Puck", parameters: {},
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(calls[0]).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:streamGenerateContent?alt=sse&key=my-api-key");
+    expect(chunks.length).toBe(2);
+    expect(chunks[0].done).toBe(false);
+    expect(wavText(chunks[0].data.buffer)).toBe("studio-stream");
+    expect(chunks[1].done).toBe(true);
+  });
 });

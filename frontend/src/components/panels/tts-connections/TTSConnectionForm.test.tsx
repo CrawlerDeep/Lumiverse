@@ -177,3 +177,34 @@ test('renders standard API key and API url inputs for other providers', async ()
   const passwordInput = container.querySelector('input[type="password"]')
   expect(passwordInput).toBeTruthy()
 })
+
+test('allows disabling streaming for Google Vertex TTS', async () => {
+  saved = []
+  await render(
+    <Form
+      providers={providers}
+      profile={ttsProfile()}
+      onSave={(input) => saved.push(input)}
+      onCancel={() => {}}
+    />
+  )
+
+  const streamCheckbox = container.querySelector('input[type="checkbox"]:not([checked="false"])') as HTMLInputElement
+  const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[]
+  // One is setDefault, one is streaming
+  const streamingToggle = checkboxes.find((c) => c.closest('label')?.textContent?.includes('qwenUseStreaming') || c.parentElement?.textContent?.includes('qwenUseStreaming'))
+  expect(streamingToggle).toBeTruthy()
+  expect(streamingToggle?.checked).toBe(true)
+
+  act(() => {
+    streamingToggle?.click()
+  })
+
+  const saveBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('save'))
+  act(() => {
+    saveBtn?.click()
+  })
+
+  expect(saved.length).toBe(1)
+  expect(saved[0].default_parameters?.use_streaming_endpoint).toBe(false)
+})

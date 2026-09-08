@@ -64,7 +64,7 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 - **Models:** Fetched live and filtered to TTS/speech models (currently `gemini-3.1-flash-tts-preview`, `gemini-2.5-pro-preview-tts`, `gemini-2.5-flash-preview-tts`), with a static fallback when the API is unreachable.
 - **Parameters:** `language_code` (optional BCP-47 code) and `temperature` (voice variation).
 - **Output format:** WAV (Gemini returns raw PCM; Lumiverse wraps it so browsers can play it).
-- **Streaming:** Not supported.
+- **Streaming:** Supported.
 
 ### Google Vertex TTS
 
@@ -74,7 +74,7 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 - **Models:** Same live-filtered TTS list with static fallback.
 - **Parameters:** Same as AI Studio TTS.
 - **Output format:** WAV.
-- **Streaming:** Not supported.
+- **Streaming:** Supported.
 
 ### Kokoro TTS (self-hosted)
 
