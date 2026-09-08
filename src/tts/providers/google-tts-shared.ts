@@ -84,7 +84,7 @@ export function buildGeminiTtsBody(request: TtsRequest): Record<string, any> {
     generationConfig.temperature = request.parameters.temperature;
   }
   return {
-    contents: [{ parts: [{ text: request.text }] }],
+    contents: [{ role: "user", parts: [{ text: request.text }] }],
     generationConfig,
   };
 }

@@ -125,6 +125,7 @@ describe("Google TTS providers", () => {
 
   test("request body carries text and voice", () => {
     const body = buildGeminiTtsBody({ text: "say this", model: "m", voice: "Zephyr", parameters: {} });
+    expect(body.contents[0].role).toBe("user");
     expect(body.contents[0].parts[0].text).toBe("say this");
     expect(body.generationConfig.speech_config.voice_config.prebuilt_voice_config.voice_name).toBe("Zephyr");
   });
