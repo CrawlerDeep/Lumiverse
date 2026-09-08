@@ -22,6 +22,8 @@ export const PROVIDER_COLORS: Record<string, string> = {
   kokoro: '#f59e0b',
   cartesia: '#5046e5',
   qwen3_tts_server: '#f97316',
+  google_tts: '#4285f4',
+  google_vertex_tts: '#34a853',
   // fallback
   custom: 'var(--lumiverse-text-dim)',
 }

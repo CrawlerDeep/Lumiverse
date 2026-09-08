@@ -1,3 +1,4 @@
+import { VERTEX_REGIONS } from './vertexConstants'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
@@ -67,12 +68,7 @@ function parseRouletteConnectionIds(profile?: ConnectionProfile): string[] {
     })
 }
 
-const VERTEX_REGIONS = [
-  'us-central1', 'us-east1', 'us-east4', 'us-west1', 'us-west4',
-  'europe-west1', 'europe-west2', 'europe-west3', 'europe-west4',
-  'asia-south1', 'asia-southeast1', 'asia-east1', 'asia-northeast1',
-  'northamerica-northeast1', 'australia-southeast1', 'global',
-]
+
 
 const BEDROCK_REGIONS = [
   'us-east-1', 'us-east-2', 'us-west-2',

@@ -45,7 +45,11 @@ export class GoogleVertexTtsProvider implements TtsProvider {
     let location = "global";
     const parsedUrl = (apiUrl || "").trim() || this.capabilities.defaultUrl;
     const regionalMatch = parsedUrl.match(/^https?:\/\/([a-z0-9-]+)-aiplatform\.googleapis\.com/);
-    if (regionalMatch) location = regionalMatch[1];
+    if (regionalMatch) {
+      location = regionalMatch[1];
+    } else if (/^[a-z0-9-]+$/.test(parsedUrl) && parsedUrl !== "global") {
+      location = parsedUrl;
+    }
     return { projectId: sa.project_id, location, host: vertexHostForLocation(location) };
   }
 

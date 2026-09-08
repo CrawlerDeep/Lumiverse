@@ -68,8 +68,8 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 
 ### Google Vertex TTS
 
-- **API key:** Required — paste the service account JSON, same as the Vertex text connection.
-- **API URL:** Selects the location. Leave blank for `global` (`https://aiplatform.googleapis.com`), or paste a regional host such as `https://us-central1-aiplatform.googleapis.com`.
+- **Credentials:** Required — upload your Google Cloud service account key JSON file (or paste it), same as the Vertex text connection.
+- **Region:** Choose your Google Cloud region (e.g. `us-central1` or `global`), matching the Vertex text connection profile.
 - **Voices:** Same 30 mapped prebuilt voices as AI Studio TTS.
 - **Models:** Same live-filtered TTS list with static fallback.
 - **Parameters:** Same as AI Studio TTS.

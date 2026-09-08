@@ -44,7 +44,8 @@ export async function synthesize(userId: string, input: SynthesizeInput): Promis
     signal: input.signal,
   };
 
-  return provider.synthesize(apiKey || "", profile.api_url || "", request);
+  const effectiveUrl = ttsConnSvc.resolveEffectiveTtsApiUrl(profile);
+  return provider.synthesize(apiKey || "", effectiveUrl, request);
 }
 
 export async function* synthesizeStream(
@@ -74,5 +75,6 @@ export async function* synthesizeStream(
     signal: input.signal,
   };
 
-  yield* provider.synthesizeStream(apiKey || "", profile.api_url || "", request);
+  const effectiveUrl = ttsConnSvc.resolveEffectiveTtsApiUrl(profile);
+  yield* provider.synthesizeStream(apiKey || "", effectiveUrl, request);
 }

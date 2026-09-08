@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { GoogleTtsProvider } from "./google-tts";
 import { GoogleVertexTtsProvider } from "./google-vertex-tts";
+import { resolveEffectiveTtsApiUrl } from "../../services/tts-connections.service";
 import { GOOGLE_TTS_MODELS, GOOGLE_TTS_VOICES, buildGeminiTtsBody, wrapPcmInWav } from "./google-tts-shared";
 
 const pcmB64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
@@ -132,5 +133,34 @@ describe("Google TTS providers", () => {
     const wav = new Uint8Array(wrapPcmInWav(new Uint8Array([1, 2, 3, 4]), 16000));
     expect(Buffer.from(wav.slice(0, 4)).toString()).toBe("RIFF");
     expect(new DataView(wav.buffer).getUint32(24, true)).toBe(16000);
+  });
+
+  test("resolveEffectiveTtsApiUrl handles Vertex region metadata and fallbacks", () => {
+    expect(resolveEffectiveTtsApiUrl({
+      provider: "google_vertex_tts",
+      metadata: { vertex_region: "us-central1" },
+    })).toBe("https://us-central1-aiplatform.googleapis.com");
+
+    expect(resolveEffectiveTtsApiUrl({
+      provider: "google_vertex_tts",
+      metadata: { vertex_region: "global" },
+    })).toBe("https://aiplatform.googleapis.com");
+
+    expect(resolveEffectiveTtsApiUrl({
+      provider: "google_vertex_tts",
+      api_url: "https://custom-host.example.com",
+      metadata: {},
+    })).toBe("https://custom-host.example.com");
+
+    expect(resolveEffectiveTtsApiUrl({
+      provider: "google_vertex_tts",
+      metadata: {},
+    })).toBe("https://aiplatform.googleapis.com");
+
+    expect(resolveEffectiveTtsApiUrl({
+      provider: "openai_tts",
+      api_url: "https://api.openai.com/v1",
+      metadata: {},
+    })).toBe("https://api.openai.com/v1");
   });
 });

@@ -588,6 +588,7 @@ export interface TtsConnectionVoicesPreviewInput {
   provider: string;
   api_url?: string;
   api_key?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface TtsConnectionModelsPreviewInput {
@@ -595,6 +596,7 @@ export interface TtsConnectionModelsPreviewInput {
   provider: string;
   api_url?: string;
   api_key?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface QwenCustomVoice {
