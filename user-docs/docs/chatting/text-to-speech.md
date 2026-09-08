@@ -56,6 +56,26 @@ The built-in providers are listed below. Enabled [Spindle extensions](../extensi
 
 - **Streaming:** Supported.
 
+### Google AI Studio TTS
+
+- **API key:** Required — plain API key, same as the Gemini text connection.
+- **Default URL:** `https://generativelanguage.googleapis.com`.
+- **Voices:** 30 mapped prebuilt voices (e.g. Kore, Charon, Puck, Zephyr, Fenrir, Leda), each with gender labels.
+- **Models:** TTS-only list — `gemini-2.5-flash-preview-tts` (fast) and `gemini-2.5-pro-preview-tts` (high quality).
+- **Parameters:** `language_code` (optional BCP-47 code) and `temperature` (voice variation).
+- **Output format:** WAV (Gemini returns raw PCM; Lumiverse wraps it so browsers can play it).
+- **Streaming:** Not supported.
+
+### Google Vertex TTS
+
+- **API key:** Required — paste the service account JSON, same as the Vertex text connection.
+- **API URL:** Selects the location. Leave blank for `global` (`https://aiplatform.googleapis.com`), or paste a regional host such as `https://us-central1-aiplatform.googleapis.com`.
+- **Voices:** Same 30 mapped prebuilt voices as AI Studio TTS.
+- **Models:** Same TTS-only list.
+- **Parameters:** Same as AI Studio TTS.
+- **Output format:** WAV.
+- **Streaming:** Not supported.
+
 ### Kokoro TTS (self-hosted)
 
 - **API key:** Not required — Kokoro is a local server.
