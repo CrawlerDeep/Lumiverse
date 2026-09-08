@@ -22,8 +22,9 @@ describe('ExpandedTextEditor Markdown preview', () => {
 describe('ExpandedTextEditor mobile editing stability', () => {
   test('focuses programmatically without allowing keyboard presentation to scroll the page', () => {
     expect(componentSource).toContain('textarea.focus({ preventScroll: true })')
-    expect(componentSource).toContain("document.documentElement.style.overflow = 'hidden'")
-    expect(componentSource).toContain('document.documentElement.style.overflow = rootOverflow')
+    // reset.css already clips the document. Do not turn it back into a
+    // programmatically scrollable overflow:hidden element while editing.
+    expect(componentSource).not.toContain('document.documentElement.style.overflow =')
   })
 
   test('keeps syntax highlighting enabled on touch-only devices', () => {
@@ -35,20 +36,24 @@ describe('ExpandedTextEditor mobile editing stability', () => {
     expect(highlightedTextareaBlock).toMatch(/-webkit-text-fill-color:\s*transparent/)
   })
 
-  test('disables scroll anchoring in the highlighted editor scroller', () => {
-    const highlightBlock = cssSource.match(/\.highlightContainer\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
-    expect(highlightBlock).toMatch(/overflow-anchor:\s*none/)
+  test('bounds the shared grid while the textarea owns scrolling', () => {
+    const innerBlock = cssSource.match(/\.highlightInner\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+    expect(innerBlock).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)/)
+    const textareaBlock = cssSource.match(/\n\.textareaHighlighted\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+    expect(textareaBlock).toMatch(/overflow-y:\s*auto/)
+    expect(cssSource).toContain('scrollbar-gutter: stable')
   })
 
   test('auto-focuses desktop editors but waits for an explicit tap on touch-only devices', () => {
     expect(componentSource).toContain("window.matchMedia?.('(any-hover: none)').matches")
-    expect(componentSource).toContain('shouldFocusSelectionRef.current = shouldAutoFocusExpandedEditor()')
+    expect(componentSource).toContain('if (autoFocus) pendingSelectionRef.current =')
   })
 
-  test('recovers a tapped caret when keyboard presentation would cover it', () => {
-    expect(componentSource).toContain('onPointerDown={handleTextareaPointerDown}')
-    expect(componentSource).toContain("window.visualViewport?.addEventListener('resize', recoverTappedCaret)")
-    expect(componentSource).toContain('tap.target.scrollTop = tap.scrollTop + recovery')
+  test('does not use tap-coordinate recovery, viewport timers, or ancestor scrollIntoView', () => {
+    expect(componentSource).not.toContain('mobileTapRef')
+    expect(componentSource).not.toContain('recoverTappedCaret')
+    expect(componentSource).not.toContain('setTimeout')
+    expect(componentSource).not.toContain('scrollIntoView')
   })
 
   test('masks only the source textarea while preserving the contextual backdrop', () => {

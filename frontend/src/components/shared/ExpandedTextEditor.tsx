@@ -9,7 +9,6 @@ import {
   type ChangeEvent,
   type CompositionEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type Ref,
   type RefObject,
   type ReactNode,
@@ -24,7 +23,7 @@ import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
 import MessageContent from '@/components/chat/MessageContent'
 import { useStore } from '@/store'
-import { calculateExpandedEditorScrollRecovery } from '@/lib/expandedTextEditorViewport'
+import { installExpandedEditorCaretReveal } from '@/lib/expandedEditorCaret'
 import {
   findExpandedTextMatches,
   replaceAllExpandedTextMatches,
@@ -234,10 +233,8 @@ interface TextSelectionSnapshot {
   direction: TextSelectionDirection
 }
 
-interface MobileTapSnapshot {
-  target: HTMLTextAreaElement
-  clientY: number
-  scrollTop: number
+interface TextSelectionRequest extends TextSelectionSnapshot {
+  focus: boolean
 }
 
 function normalizeSelectionDirection(direction: HTMLTextAreaElement['selectionDirection']): TextSelectionDirection {
@@ -288,14 +285,15 @@ export default function ExpandedTextEditor({
 }: ExpandedTextEditorProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'expandedTextEditor' })
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const dialogRef = useRef<HTMLDivElement>(null)
+  const highlightRef = useRef<HTMLPreElement>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
   const overlayMouseDownRef = useRef<EventTarget | null>(null)
   const onCloseRef = useRef(onClose)
   const selectionRef = useRef<TextSelectionSnapshot | null>(null)
+  // Native select events may arrive during a programmatic edit's keydown.
+  // Keep the requested post-edit caret separate from observed DOM selection.
+  const pendingSelectionRef = useRef<TextSelectionRequest | null>(null)
   const hasInitializedSelectionRef = useRef(false)
-  const shouldRestoreSelectionRef = useRef(true)
-  const shouldFocusSelectionRef = useRef(true)
   const isComposingRef = useRef(false)
   const findModeRef = useRef<'find' | 'replace' | null>(null)
   const findQueryRef = useRef('')
@@ -303,9 +301,6 @@ export default function ExpandedTextEditor({
   const macroSearchRef = useRef('')
   const showMacrosRef = useRef(false)
   const showMarkdownPreviewRef = useRef(false)
-  const mobileTapRef = useRef<MobileTapSnapshot | null>(null)
-  const mobileRecoveryFrameRef = useRef(0)
-  const mobileRecoveryTimerRef = useRef(0)
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false)
   const previewUserName = useStore((state) => state.user?.name ?? state.user?.username ?? '')
   onCloseRef.current = onClose
@@ -380,15 +375,24 @@ export default function ExpandedTextEditor({
     }
   }, [])
 
+  // The native textarea alone owns scrolling and caret visibility. The inert
+  // highlight layer follows it, never the other way around (including IMEs,
+  // selection dragging, keyboard navigation, and viewport resizing).
+  const syncHighlightScroll = useCallback(() => {
+    const textarea = textareaRef.current
+    const highlight = highlightRef.current
+    if (!textarea || !highlight) return
+    highlight.scrollTop = textarea.scrollTop
+    highlight.scrollLeft = textarea.scrollLeft
+  }, [])
+
   const restoreSelection = useCallback(() => {
     const textarea = textareaRef.current
-    const selection = selectionRef.current
+    const selection = pendingSelectionRef.current
     if (!textarea || !selection || isComposingRef.current) return
 
     const nextSelection = clampSelection(selection, textarea.value.length)
-    selectionRef.current = nextSelection
-
-    if (shouldFocusSelectionRef.current && document.activeElement !== textarea) {
+    if (selection.focus && document.activeElement !== textarea) {
       // Focusing an off-screen selection is allowed to scroll every ancestor
       // (including the document) unless preventScroll is explicit. Mobile
       // browsers do that scroll while also resizing for the keyboard, which
@@ -405,22 +409,24 @@ export default function ExpandedTextEditor({
       textarea.setSelectionRange(nextSelection.start, nextSelection.end, nextSelection.direction)
     }
 
-    shouldRestoreSelectionRef.current = false
-    shouldFocusSelectionRef.current = false
+    selectionRef.current = nextSelection
+    pendingSelectionRef.current = null
   }, [])
+
+  const applyEdit = useCallback((nextValue: string, selection: TextSelectionRequest) => {
+    pendingSelectionRef.current = selection
+    // Replacing a match with identical text does not trigger a value commit.
+    // Consume its selection now so it cannot leak into the next keystroke.
+    if (nextValue === value) restoreSelection()
+    onChange(nextValue)
+  }, [onChange, restoreSelection, value])
 
   const setMatchSelection = useCallback((match: ExpandedTextMatch | undefined) => {
     if (!match) return
     selectionRef.current = { start: match.start, end: match.end, direction: 'forward' }
-    shouldRestoreSelectionRef.current = true
-    shouldFocusSelectionRef.current = false
     const textarea = textareaRef.current
     if (textarea) {
       textarea.setSelectionRange(match.start, match.end, 'forward')
-      // Find navigation changes selection without changing `value`, so there
-      // will be no layout effect to consume this request. Do not let it leak
-      // into the user's next native keystroke.
-      shouldRestoreSelectionRef.current = false
     }
   }, [])
 
@@ -441,23 +447,17 @@ export default function ExpandedTextEditor({
     let nextIndex = nextMatches.findIndex((candidate) => candidate.start >= nextOffset)
     if (nextIndex === -1) nextIndex = 0
     setCurrentMatchIndex(nextIndex)
-    selectionRef.current = nextMatches[nextIndex]
-      ? { ...nextMatches[nextIndex], direction: 'forward' }
-      : { start: nextOffset, end: nextOffset, direction: 'none' }
-    shouldRestoreSelectionRef.current = true
-    shouldFocusSelectionRef.current = false
-    onChange(nextValue)
-  }, [currentMatchIndex, findMatches, findQuery, onChange, replacement, value])
+    applyEdit(nextValue, nextMatches[nextIndex]
+      ? { ...nextMatches[nextIndex], direction: 'forward', focus: false }
+      : { start: nextOffset, end: nextOffset, direction: 'none', focus: false })
+  }, [applyEdit, currentMatchIndex, findMatches, findQuery, replacement, value])
 
   const replaceAllMatches = useCallback(() => {
     if (findMatches.length === 0) return
     const nextValue = replaceAllExpandedTextMatches(value, findMatches, replacement)
-    selectionRef.current = { start: 0, end: 0, direction: 'none' }
-    shouldRestoreSelectionRef.current = true
-    shouldFocusSelectionRef.current = false
     setCurrentMatchIndex(0)
-    onChange(nextValue)
-  }, [findMatches, onChange, replacement, value])
+    applyEdit(nextValue, { start: 0, end: 0, direction: 'none', focus: false })
+  }, [applyEdit, findMatches, replacement, value])
 
   useEffect(() => {
     if (!findMode) return
@@ -479,25 +479,35 @@ export default function ExpandedTextEditor({
     lastScrolledMatchNavigationRequestRef.current = matchNavigationRequest
     if (findMatches.length === 0) return
     const frame = requestAnimationFrame(() => {
-      dialogRef.current
-        ?.querySelector<HTMLElement>('[data-find-current="true"]')
-        ?.scrollIntoView({ block: 'center' })
+      const textarea = textareaRef.current
+      const highlight = highlightRef.current
+      const match = highlight?.querySelector<HTMLElement>('[data-find-current="true"]')
+      if (!textarea || !highlight || !match) return
+      const rect = highlight.getBoundingClientRect()
+      const scale = highlight.offsetHeight > 0 ? rect.height / highlight.offsetHeight : 1
+      if (scale <= 0) return
+      const matchRect = match.getBoundingClientRect()
+      // Explicit find navigation moves only the editor, never modal/page
+      // ancestors. Convert rendered pixels back to scroll units under UI zoom.
+      textarea.scrollTop = highlight.scrollTop + (matchRect.top + matchRect.height / 2 - rect.top - rect.height / 2) / scale
+      syncHighlightScroll()
     })
     return () => cancelAnimationFrame(frame)
-  }, [currentMatchIndex, findMatches, matchNavigationRequest])
+  }, [currentMatchIndex, findMatches, matchNavigationRequest, syncHighlightScroll])
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current
     if (!textarea) return
 
     if (!hasInitializedSelectionRef.current) {
+      const autoFocus = shouldAutoFocusExpandedEditor()
       const initialPos = Math.max(0, Math.min(initialCursorPos ?? textarea.value.length, textarea.value.length))
       selectionRef.current = { start: initialPos, end: initialPos, direction: 'none' }
       hasInitializedSelectionRef.current = true
-      shouldRestoreSelectionRef.current = true
-      shouldFocusSelectionRef.current = shouldAutoFocusExpandedEditor()
+      // A touch editor opens for reading. Do not pre-position an unfocused
+      // caret at the end before the user's first tap/keyboard presentation.
+      if (autoFocus) pendingSelectionRef.current = { ...selectionRef.current, focus: true }
     }
-    if (!shouldRestoreSelectionRef.current || isComposingRef.current) return
     restoreSelection()
   }, [initialCursorPos, restoreSelection, showMarkdownPreview, value])
 
@@ -544,66 +554,13 @@ export default function ExpandedTextEditor({
     // Capture phase so we intercept before parent modal escape handlers
     document.addEventListener('keydown', handleEditorShortcut, true)
 
-    const bodyOverflow = document.body.style.overflow
-    const rootOverflow = document.documentElement.style.overflow
-    if (!inline) {
-      // WebKit can scroll the root even while body overflow is locked when a
-      // virtual keyboard is presented. Lock both scrolling elements for the
-      // lifetime of the portaled modal; the editor's own scroller remains live.
-      document.body.style.overflow = 'hidden'
-      document.documentElement.style.overflow = 'hidden'
-    }
-
     return () => {
       document.removeEventListener('keydown', handleEditorShortcut, true)
-      if (!inline) {
-        document.body.style.overflow = bodyOverflow
-        document.documentElement.style.overflow = rootOverflow
-      }
     }
-  }, [inline])
-
-  useEffect(() => {
-    if (inline || !window.matchMedia?.('(any-hover: none)').matches) return
-
-    const recoverTappedCaret = () => {
-      cancelAnimationFrame(mobileRecoveryFrameRef.current)
-      mobileRecoveryFrameRef.current = requestAnimationFrame(() => {
-        mobileRecoveryFrameRef.current = 0
-        const tap = mobileTapRef.current
-        if (!tap || document.activeElement !== tap.target) return
-
-        const rect = tap.target.getBoundingClientRect()
-        const renderedScale = tap.target.offsetWidth > 0
-          ? rect.width / tap.target.offsetWidth
-          : 1
-        const recovery = calculateExpandedEditorScrollRecovery({
-          tapClientY: tap.clientY,
-          visibleViewportHeight: window.visualViewport?.height ?? window.innerHeight,
-          renderedScale,
-        })
-        if (recovery > 0) tap.target.scrollTop = tap.scrollTop + recovery
-
-        window.clearTimeout(mobileRecoveryTimerRef.current)
-        mobileRecoveryTimerRef.current = window.setTimeout(() => {
-          mobileTapRef.current = null
-        }, 450)
-      })
-    }
-
-    window.addEventListener('resize', recoverTappedCaret, { passive: true })
-    window.visualViewport?.addEventListener('resize', recoverTappedCaret)
-    window.visualViewport?.addEventListener('scroll', recoverTappedCaret)
-    return () => {
-      window.removeEventListener('resize', recoverTappedCaret)
-      window.visualViewport?.removeEventListener('resize', recoverTappedCaret)
-      window.visualViewport?.removeEventListener('scroll', recoverTappedCaret)
-      cancelAnimationFrame(mobileRecoveryFrameRef.current)
-      window.clearTimeout(mobileRecoveryTimerRef.current)
-    }
-  }, [inline])
+  }, [])
 
   const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    pendingSelectionRef.current = null
     captureSelection(e.currentTarget)
     // Native typing has already placed the caret correctly. Reapplying the
     // selection after React commits the controlled value can race mobile IMEs
@@ -615,15 +572,6 @@ export default function ExpandedTextEditor({
   const handleTextareaSelect = useCallback((e: SyntheticEvent<HTMLTextAreaElement>) => {
     captureSelection(e.currentTarget)
   }, [captureSelection])
-
-  const handleTextareaPointerDown = useCallback((e: ReactPointerEvent<HTMLTextAreaElement>) => {
-    if (e.pointerType !== 'touch' && !window.matchMedia?.('(any-hover: none)').matches) return
-    mobileTapRef.current = {
-      target: e.currentTarget,
-      clientY: e.clientY,
-      scrollTop: e.currentTarget.scrollTop,
-    }
-  }, [])
 
   const handleCompositionStart = useCallback((e: CompositionEvent<HTMLTextAreaElement>) => {
     isComposingRef.current = true
@@ -640,35 +588,21 @@ export default function ExpandedTextEditor({
     opts?: {
       target?: HTMLTextAreaElement | null
       focus?: boolean
-      appendIfMissing?: boolean
     },
   ) => {
     const target = opts?.target ?? textareaRef.current
-    if (!target) {
-      const nextValue = opts?.appendIfMissing === false ? value : value + insertedText
-      selectionRef.current = {
-        start: nextValue.length,
-        end: nextValue.length,
-        direction: 'none',
-      }
-      shouldRestoreSelectionRef.current = true
-      shouldFocusSelectionRef.current = opts?.focus ?? true
-      onChange(nextValue)
-      return
-    }
+    if (!target) return
 
     const start = target.selectionStart
     const end = target.selectionEnd
     const nextValue = value.substring(0, start) + insertedText + value.substring(end)
-    selectionRef.current = {
+    applyEdit(nextValue, {
       start: start + insertedText.length,
       end: start + insertedText.length,
       direction: 'none',
-    }
-    shouldRestoreSelectionRef.current = true
-    shouldFocusSelectionRef.current = opts?.focus ?? document.activeElement !== target
-    onChange(nextValue)
-  }, [onChange, value])
+      focus: opts?.focus ?? document.activeElement !== target,
+    })
+  }, [applyEdit, value])
 
   const handleTextareaKeyDown = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (
@@ -704,14 +638,15 @@ export default function ExpandedTextEditor({
 
   const toggleMarkdownPreview = useCallback(() => {
     if (showMarkdownPreview) {
-      shouldRestoreSelectionRef.current = true
-      shouldFocusSelectionRef.current = true
+      const selection = selectionRef.current
+      if (selection) pendingSelectionRef.current = { ...selection, focus: shouldAutoFocusExpandedEditor() }
     } else {
+      captureSelection(textareaRef.current)
       setShowMacros(false)
       closeFindPanel()
     }
     setShowMarkdownPreview(!showMarkdownPreview)
-  }, [closeFindPanel, showMarkdownPreview])
+  }, [captureSelection, closeFindPanel, showMarkdownPreview])
 
   const hasMacros = resolvedMacros.length > 0
   const showHighlight = hasMacros || !!markdownOnly || !!findQuery
@@ -724,8 +659,17 @@ export default function ExpandedTextEditor({
     [currentMatchIndex, findMatches, findQuery, showHighlight, value],
   )
 
+  useLayoutEffect(syncHighlightScroll, [highlightNodes, showMarkdownPreview, syncHighlightScroll])
+
+  useEffect(() => {
+    const textarea = textareaRef.current
+    const mirror = highlightRef.current
+    if (!textarea || !mirror) return
+    return installExpandedEditorCaretReveal(textarea, mirror)
+  }, [])
+
   const editorContent = (
-    <div ref={dialogRef} className={inline ? s.inlineDialog : s.dialog} onClick={e => e.stopPropagation()}>
+    <div className={inline ? s.inlineDialog : s.dialog} onClick={e => e.stopPropagation()}>
       <div className={s.header}>
         <div className={s.headerContent}>
           <h3 className={s.title}>{title}</h3>
@@ -920,7 +864,7 @@ export default function ExpandedTextEditor({
           </div>
         )}
         <div className={s.editorArea}>
-          {showMarkdownPreview ? (
+          {showMarkdownPreview && (
             <div className={s.markdownPreview}>
               <MessageContent
                 content={value}
@@ -929,39 +873,29 @@ export default function ExpandedTextEditor({
                 disableInterceptors
               />
             </div>
-          ) : showHighlight ? (
-            <div className={s.highlightContainer}>
-              <div className={s.highlightInner}>
-                <pre className={s.highlightPre} aria-hidden="true">{highlightNodes}{'\n'}</pre>
-                <textarea
-                  ref={textareaRef}
-                  className={s.textareaHighlighted}
-                  value={value}
-                  onChange={handleTextareaChange}
-                  onSelect={handleTextareaSelect}
-                  onPointerDown={handleTextareaPointerDown}
-                  onKeyDown={handleTextareaKeyDown}
-                  onCompositionStart={handleCompositionStart}
-                  onCompositionEnd={handleCompositionEnd}
-                  placeholder={placeholder}
-                  spellCheck={false}
-                />
-              </div>
-            </div>
-          ) : (
-            <textarea
-              ref={textareaRef}
-              className={s.textarea}
-              value={value}
-              onChange={handleTextareaChange}
-              onSelect={handleTextareaSelect}
-              onPointerDown={handleTextareaPointerDown}
-              onKeyDown={handleTextareaKeyDown}
-              onCompositionStart={handleCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
-              placeholder={placeholder}
-            />
           )}
+          <div className={s.highlightContainer} hidden={showMarkdownPreview}>
+            <div className={s.highlightInner}>
+              <pre
+                ref={highlightRef}
+                className={`${s.highlightPre} ${showHighlight ? '' : s.highlightPlain}`}
+                aria-hidden="true"
+              >{highlightNodes ?? value}{'\u200b'}</pre>
+              <textarea
+                ref={textareaRef}
+                className={showHighlight ? s.textareaHighlighted : s.textarea}
+                value={value}
+                onChange={handleTextareaChange}
+                onSelect={handleTextareaSelect}
+                onScroll={syncHighlightScroll}
+                onKeyDown={handleTextareaKeyDown}
+                onCompositionStart={handleCompositionStart}
+                onCompositionEnd={handleCompositionEnd}
+                placeholder={placeholder}
+                spellCheck={showHighlight ? false : undefined}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>
