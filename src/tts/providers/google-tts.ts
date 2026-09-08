@@ -9,6 +9,7 @@ import {
   buildGeminiTtsBody,
   extractGeminiTtsAudio,
   isTtsModelId,
+  streamGeminiTtsAudio,
 } from "./google-tts-shared";
 
 /**
@@ -26,7 +27,7 @@ export class GoogleTtsProvider implements TtsProvider {
     staticVoices: GOOGLE_TTS_VOICES,
     modelListStyle: "dynamic",
     staticModels: GOOGLE_TTS_FALLBACK_MODELS,
-    supportsStreaming: false,
+    supportsStreaming: true,
     supportedFormats: ["wav"],
     defaultUrl: "https://generativelanguage.googleapis.com",
     defaultFormat: "wav",
@@ -69,8 +70,30 @@ export class GoogleTtsProvider implements TtsProvider {
     return { audioData, contentType, model: request.model, provider: this.name };
   }
 
-  async *synthesizeStream(): AsyncGenerator<TtsStreamChunk, void, unknown> {
-    throw new Error(`${this.displayName} does not support streaming`);
+  async *synthesizeStream(
+    apiKey: string,
+    apiUrl: string,
+    request: TtsRequest,
+  ): AsyncGenerator<TtsStreamChunk, void, unknown> {
+    if (!request.voice) {
+      throw new ProviderRequestError({
+        provider: this.displayName,
+        operation: "tts stream",
+        detail: "No voice selected",
+        retryable: false,
+      });
+    }
+    const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(buildGeminiTtsBody(request)),
+      signal: request.signal,
+    });
+    if (!res.ok) await throwProviderResponseError(this.displayName, "tts stream", res);
+    yield* streamGeminiTtsAudio(res, request.signal);
   }
 
   async validateKey(apiKey: string, apiUrl: string): Promise<boolean> {

@@ -24,6 +24,7 @@ export interface TtsConnectionVoicesPreviewInput {
   provider: string;
   api_url?: string;
   api_key?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface TtsConnectionModelsPreviewInput {
@@ -31,6 +32,25 @@ export interface TtsConnectionModelsPreviewInput {
   provider: string;
   api_url?: string;
   api_key?: string;
+  metadata?: Record<string, any>;
+}
+
+export function resolveEffectiveTtsApiUrl(profile: {
+  provider: string;
+  api_url?: string | null;
+  metadata?: Record<string, any> | null;
+}): string {
+  const url = (profile.api_url || "").trim();
+  if (profile.provider === "google_vertex_tts") {
+    const region = profile.metadata?.vertex_region;
+    if (region) {
+      if (region === "global") return "https://aiplatform.googleapis.com";
+      return `https://${region}-aiplatform.googleapis.com`;
+    }
+    if (url) return url;
+    return "https://aiplatform.googleapis.com";
+  }
+  return url;
 }
 
 function mergeStoredVoices(
@@ -263,7 +283,8 @@ export async function testConnection(
   }
 
   try {
-    const valid = await provider.validateKey(apiKey || "", profile.api_url || "");
+    const effectiveUrl = resolveEffectiveTtsApiUrl(profile);
+    const valid = await provider.validateKey(apiKey || "", effectiveUrl);
     return {
       success: valid,
       message: valid ? "Connection successful" : "API key validation failed",
@@ -286,6 +307,7 @@ export async function listConnectionModels(
     connection_id: id,
     provider: profile.provider,
     api_url: profile.api_url,
+    metadata: profile.metadata,
     api_key: apiKey || undefined,
   });
 }
@@ -312,7 +334,13 @@ export async function listConnectionModelsPreview(
   }
 
   try {
-    const models = await provider.listModels(apiKey || "", input.api_url ?? existing?.api_url ?? "");
+    const metadata = input.metadata ?? existing?.metadata ?? {};
+    const effectiveUrl = resolveEffectiveTtsApiUrl({
+      provider: providerId,
+      api_url: input.api_url ?? existing?.api_url ?? "",
+      metadata,
+    });
+    const models = await provider.listModels(apiKey || "", effectiveUrl);
     const error = models.length === 0 && provider.capabilities.modelListStyle === "dynamic"
       ? "Provider model listing did not include any obvious TTS models"
       : undefined;
@@ -334,6 +362,7 @@ export async function listConnectionVoices(
     connection_id: id,
     provider: profile.provider,
     api_url: profile.api_url,
+    metadata: profile.metadata,
     api_key: apiKey || undefined,
   });
 }
@@ -356,7 +385,13 @@ export async function listConnectionVoicesPreview(
   }
 
   try {
-    const voices = await provider.listVoices(apiKey || "", input.api_url ?? existing?.api_url ?? "");
+    const metadata = input.metadata ?? existing?.metadata ?? {};
+    const effectiveUrl = resolveEffectiveTtsApiUrl({
+      provider: providerId,
+      api_url: input.api_url ?? existing?.api_url ?? "",
+      metadata,
+    });
+    const voices = await provider.listVoices(apiKey || "", effectiveUrl);
     return {
       voices: mergeStoredVoices(providerId, existing, voices),
       provider: providerId,

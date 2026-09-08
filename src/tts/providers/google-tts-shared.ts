@@ -1,4 +1,4 @@
-import type { TtsRequest } from "../types";
+import type { TtsRequest, TtsStreamChunk } from "../types";
 
 /** Gemini text-to-speech models. TTS-only list: no text/generation models. */
 export const GOOGLE_TTS_MODELS = [
@@ -84,7 +84,7 @@ export function buildGeminiTtsBody(request: TtsRequest): Record<string, any> {
     generationConfig.temperature = request.parameters.temperature;
   }
   return {
-    contents: [{ parts: [{ text: request.text }] }],
+    contents: [{ role: "user", parts: [{ text: request.text }] }],
     generationConfig,
   };
 }
@@ -140,4 +140,93 @@ export function extractGeminiTtsAudio(data: any): { audioData: ArrayBuffer; cont
     }
   }
   throw new Error("No audio payload in Gemini TTS response");
+}
+
+/** Extract inline audio payloads from a candidate part. */
+export function* extractGeminiTtsAudioChunks(data: any): Generator<TtsStreamChunk, void, unknown> {
+  const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    const inline = part?.inlineData || part?.inline_data;
+    if (inline?.data) {
+      const mimeType: string | undefined = inline.mimeType || inline.mime_type;
+      const audioData = wrapPcmInWav(base64ToBytes(inline.data), parsePcmRate(mimeType));
+      yield {
+        data: new Uint8Array(audioData),
+        done: false,
+        kind: "audio_file",
+        mimeType: "audio/wav",
+      };
+    }
+  }
+}
+
+/** Consume an SSE response from Gemini streamGenerateContent and yield audio WAV chunks. */
+export async function* streamGeminiTtsAudio(
+  res: Response,
+  signal?: AbortSignal,
+): AsyncGenerator<TtsStreamChunk, void, unknown> {
+  if (!res.body) {
+    throw new Error("No response body for streaming");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let emittedAny = false;
+
+  try {
+    while (true) {
+      if (signal?.aborted) return;
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const payload = trimmed.slice(6).trim();
+        if (payload === "[DONE]") continue;
+
+        try {
+          const data = JSON.parse(payload);
+          for (const chunk of extractGeminiTtsAudioChunks(data)) {
+            emittedAny = true;
+            yield chunk;
+          }
+        } catch {
+          // Ignore unparseable line
+        }
+      }
+    }
+
+    buffer += decoder.decode().replace(/\r/g, "");
+    if (buffer.trim().startsWith("data: ")) {
+      const payload = buffer.trim().slice(6).trim();
+      if (payload && payload !== "[DONE]") {
+        try {
+          const data = JSON.parse(payload);
+          for (const chunk of extractGeminiTtsAudioChunks(data)) {
+            emittedAny = true;
+            yield chunk;
+          }
+        } catch {}
+      }
+    }
+
+    if (!emittedAny) {
+      throw new Error("No audio payload in Gemini TTS stream");
+    }
+
+    yield {
+      data: new Uint8Array(0),
+      done: true,
+      kind: "audio_file",
+      mimeType: "audio/wav",
+    };
+  } finally {
+    reader.cancel().catch(() => {});
+  }
 }
