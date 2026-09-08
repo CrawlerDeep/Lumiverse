@@ -44,7 +44,6 @@ mock.module('@/lib/spindle/display-resolver-registry', () => ({
 
 const {
   applyDisplayRegexTiered,
-  canApplyDisplayRegexInWorker,
   resetTieredPipelineForTests,
 } = await import('./pipeline')
 const {
@@ -138,7 +137,6 @@ function script(id: string, overrides: Partial<RegexScript> = {}): RegexScript {
 }
 
 const context = { isUser: false, depth: 0 }
-const resolveRawTemplates = async (templates: Record<string, string>) => templates
 const flush = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve() }
 
 afterEach(() => {
@@ -152,46 +150,47 @@ afterEach(() => {
 })
 
 describe('isolated regex pipeline', () => {
-  test('only worker-contained scripts qualify for immediate streaming passes', () => {
-    makeHarness()
-    expect(canApplyDisplayRegexInWorker('ordinary response', [
-      script('plain'),
-      script('macro-find', { substitute_macros: 'find' }),
-    ])).toBe(true)
-    expect(canApplyDisplayRegexInWorker('ordinary response', [
-      script('raw-without-macros', { substitute_macros: 'raw' }),
-      script('after-without-macros', { substitute_macros: 'after' }),
-    ])).toBe(true)
-    expect(canApplyDisplayRegexInWorker('ordinary response', [
-      script('raw-macro', { substitute_macros: 'raw', replace_string: '{{user}}' }),
-    ])).toBe(false)
-    expect(canApplyDisplayRegexInWorker('response with {{user}}', [
-      script('after-macro-input', { substitute_macros: 'after' }),
-    ])).toBe(false)
-    expect(canApplyDisplayRegexInWorker('ordinary response', [
-      script('introduces-macro', { replace_string: '{{user}}' }),
-      script('consumes-macro-after', { substitute_macros: 'after' }),
-    ])).toBe(false)
-    expect(canApplyDisplayRegexInWorker('ordinary response', [
-      script('action', { actions: [{
-        id: 'send',
-        type: 'send',
-        multi_select: false,
-        cost: '1',
-        limit: '1',
-        title: 'Send',
-        subtitle: '',
-        content: '',
-      }] }),
-    ])).toBe(false)
-    expect(canApplyDisplayRegexInWorker('ordinary response', [
-      script('match-action', { metadata: { match_actions: ['move_top'] } }),
-    ])).toBe(false)
-    expect(canApplyDisplayRegexInWorker('combat', [
-      script('bounded', { find_regex: '{{getchatvar::mode}}', preset_id: 'preset', metadata: { prompt_activation: {
-        source: 'user_input', lifetime: 'latest', mappings: [{ capture: '0', value: 'combat', block_ids: ['rules'], enabled: true }],
-      } } }),
-    ])).toBe(false)
+  test('proven no-match scripts start neither workers, deadlines nor backend requests', async () => {
+    const { spawned, timers } = makeHarness()
+    const fetchSpy = spyOn(globalThis, 'fetch')
+    try {
+      const body = 'a'.repeat(100_000)
+      const outcome = await applyDisplayRegexTiered(body, [
+        script('pathological', { find_regex: '(a+)+ENDING' }),
+        script('raw', { find_regex: 'status.*ENDING', substitute_macros: 'raw', replace_string: '{{user}}' }),
+      ], context)
+      expect(outcome.result).toBe(body)
+      expect(spawned).toHaveLength(0)
+      expect(timers).toHaveLength(0)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  test('gating preserves ordered matches introduced across worker and backend batches', async () => {
+    const { spawned } = makeHarness()
+    const bodies: Array<{ content: string; scripts: RegexScript[] }> = []
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)))
+      return new Response(JSON.stringify({ result: 'Alice' }), { status: 200 })
+    }) as typeof fetch)
+    try {
+      const promise = applyDisplayRegexTiered('x', [
+        script('absent', { find_regex: 'ABSENTENDING', substitute_macros: 'raw', replace_string: '{{user}}' }),
+        script('introduce', { find_regex: 'x', replace_string: 'statusENDING' }),
+        script('consume', { find_regex: 'statusENDING', substitute_macros: 'raw', replace_string: '{{user}}' }),
+        script('finish', { find_regex: 'Alice', replace_string: 'done' }),
+      ], context)
+      await flush()
+      echoWorker(spawned[0])
+      expect((await promise).result).toBe('done')
+      expect(bodies).toHaveLength(1)
+      expect(bodies[0].content).toBe('statusENDING')
+      expect(bodies[0].scripts.map((s) => s.id)).toEqual(['consume'])
+    } finally {
+      fetchSpy.mockRestore()
+    }
   })
 
   test('an edit re-syncs the session overlay from the persisted row instead of dropping quarantine', () => {
@@ -225,7 +224,7 @@ describe('isolated regex pipeline', () => {
     const promise = applyDisplayRegexTiered('foo boo', [
       script('one', { find_regex: 'foo', replace_string: 'bar' }),
       script('two', { find_regex: 'o+', replace_string: '<$&>' }),
-    ], context, resolveRawTemplates)
+    ], context)
     await flush()
     echoWorker(spawned[0])
     expect((await promise).result).toBe('bar b<oo>')
@@ -246,7 +245,7 @@ describe('isolated regex pipeline', () => {
         replace_string: 'baz',
         substitute_macros: 'after',
       }),
-    ], context, resolveRawTemplates)
+    ], context)
     await flush()
     echoWorker(spawned[0])
 
@@ -259,7 +258,7 @@ describe('isolated regex pipeline', () => {
     const { spawned, fireLatestTimer } = makeHarness()
     const slow = script('slow', { find_regex: 'a' })
     const safe = script('safe', { find_regex: 'b', replace_string: 'B' })
-    const promise = applyDisplayRegexTiered('ab', [slow, safe], context, resolveRawTemplates)
+    const promise = applyDisplayRegexTiered('ab', [slow, safe], context)
     await flush()
 
     const firstWorker = spawned[0]
@@ -289,7 +288,7 @@ describe('isolated regex pipeline', () => {
       try {
         const innocent = script('innocent-literal', { find_regex: 'a', replace_string: 'A' })
         const safe = script('safe-suffix', { find_regex: 'b', replace_string: 'B' })
-        const promise = applyDisplayRegexTiered('ab', [innocent, safe], context, resolveRawTemplates)
+        const promise = applyDisplayRegexTiered('ab', [innocent, safe], context)
         await flush()
 
         // No progress message: the browser scheduled the watchdog while the
@@ -322,7 +321,7 @@ describe('isolated regex pipeline', () => {
         const prefix = script('prefix', { find_regex: 'a', replace_string: 'A' })
         const catastrophic = script('catastrophic', { find_regex: '(b+)+$', replace_string: 'B' })
         const suffix = script('suffix', { find_regex: '(c+)+$', replace_string: 'C' })
-        const promise = applyDisplayRegexTiered('abc', [prefix, catastrophic, suffix], context, resolveRawTemplates)
+        const promise = applyDisplayRegexTiered('abc', [prefix, catastrophic, suffix], context)
         await flush()
 
         const firstWorker = spawned[0]
@@ -357,7 +356,7 @@ describe('isolated regex pipeline', () => {
       }), { status: 200, headers: { 'content-type': 'application/json' } }))
       try {
         const innocent = script('started-innocent', { find_regex: '^ok$', replace_string: 'ok' })
-        const promise = applyDisplayRegexTiered('ok', [innocent], context, resolveRawTemplates)
+        const promise = applyDisplayRegexTiered('ok', [innocent], context)
         await flush()
         const job = spawned[0].sent[0]
         spawned[0].respond({ type: 'progress', jobId: job.jobId, scriptIndex: 0, scriptId: innocent.id })
@@ -378,7 +377,7 @@ describe('isolated regex pipeline', () => {
     try {
       const risky = script('risky', { find_regex: '(a|aa)+$' })
       const body = `${'a'.repeat(40)}X`
-      const outcome = await applyDisplayRegexTiered(body, [risky], context, resolveRawTemplates)
+      const outcome = await applyDisplayRegexTiered(body, [risky], context)
       expect(outcome).toMatchObject({ result: body, cacheable: false })
       expect(toastCalls).toHaveLength(1)
     } finally {
@@ -390,7 +389,7 @@ describe('isolated regex pipeline', () => {
     const { spawned } = makeHarness()
     const quarantined = script('quarantined')
     quarantineRegexScript(quarantined)
-    const result = await applyDisplayRegexTiered('x', [quarantined], context, resolveRawTemplates)
+    const result = await applyDisplayRegexTiered('x', [quarantined], context)
     expect(result.result).toBe('x')
     expect(spawned).toHaveLength(0)
   })
@@ -399,7 +398,7 @@ describe('isolated regex pipeline', () => {
     const { spawned } = makeHarness()
     registryState.owned = true
     registryState.resolver = { applyScripts: async ({ content }: { content: string }) => ({ content: `owned:${content}`, cacheable: false }) }
-    const result = await applyDisplayRegexTiered('x', [script('owned')], { ...context, chatId: 'chat' }, resolveRawTemplates)
+    const result = await applyDisplayRegexTiered('x', [script('owned')], { ...context, chatId: 'chat' })
     expect(result).toMatchObject({ result: 'owned:x', cacheable: false })
     expect(spawned).toHaveLength(0)
   })

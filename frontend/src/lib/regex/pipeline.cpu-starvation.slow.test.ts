@@ -66,7 +66,6 @@ function script(id: string): RegexScript {
   }
 }
 const context = { isUser: false, depth: 0 }
-const resolveRawTemplates = async (t: Record<string, string>) => t
 
 // The pipeline warns per skipped script. Assertions still surface failures.
 const realWarn = console.warn
@@ -90,7 +89,7 @@ describe('regex worker under CPU starvation', () => {
       const stop = hogs > 0 ? saturateCpu(hogs) : () => {}
       if (hogs > 0) await new Promise((r) => setTimeout(r, 150))
       const startedAt = Date.now()
-      await applyDisplayRegexTiered('a1 a2 a3 a4 a5', scripts, context, resolveRawTemplates)
+      await applyDisplayRegexTiered('a1 a2 a3 a4 a5', scripts, context)
       const wallMs = Date.now() - startedAt
       stop()
       const quarantined = scripts.filter((s) => getRegexExecTier(s).tier === 'quarantined').length

@@ -110,7 +110,6 @@ function script(id: string, overrides: Partial<RegexScript> = {}): RegexScript {
   }
 }
 
-const resolveRawTemplates = async (templates: Record<string, string>) => templates
 const flush = async () => { for (let i = 0; i < 12; i += 1) await Promise.resolve() }
 
 afterEach(() => {
@@ -148,7 +147,6 @@ describe('chat-open burst of distinct messages', () => {
         `msg${index} foo ★■`,
         scripts,
         { isUser: false, depth: index, chatId: 'chat-1', messageId: `m${index}` },
-        resolveRawTemplates,
       ))
       await flush()
       expect(spawned).toHaveLength(1)

@@ -146,7 +146,6 @@ function script(id: string, over: Partial<RegexScript> = {}): RegexScript {
 }
 
 const context = { isUser: false, depth: 0 }
-const resolveRawTemplates = async (t: Record<string, string>) => t
 const flush = async (): Promise<void> => { for (let i = 0; i < 2; i += 1) await Promise.resolve() }
 
 async function drive<T>(pending: Promise<T>, fireLatest: () => void, maxTicks = 60): Promise<T> {
@@ -184,7 +183,7 @@ async function quarantinedCount(
   for (let r = 0; r < RENDERS; r += 1) {
     const { fireLatest } = fakeHarness(congestedCanary)
     await drive(
-      applyDisplayRegexTiered(ids.join(' '), ids.map((id) => script(id)), context, resolveRawTemplates),
+      applyDisplayRegexTiered(ids.join(' '), ids.map((id) => script(id)), context),
       fireLatest,
     )
   }
@@ -228,7 +227,7 @@ describe('a cold-start timeout is not evidence about any script', () => {
     installBackend('congested')
     const quoted = script('quoted', { find_regex: BENIGN_NESTED, replace_string: 'X' })
     await drive(
-      applyDisplayRegexTiered('「a」「b」', [quoted], context, resolveRawTemplates),
+      applyDisplayRegexTiered('「a」「b」', [quoted], context),
       fireLatest,
     )
     expect(new Set(persisted).has('quoted')).toBe(false)
@@ -243,7 +242,7 @@ describe('a stalled worker is not evidence about the pattern', () => {
     installBackend('congested')
     const stalled = script('stalled')
     await drive(
-      applyDisplayRegexTiered('stalled', [stalled], context, resolveRawTemplates),
+      applyDisplayRegexTiered('stalled', [stalled], context),
       fireLatest,
     )
     expect(new Set(persisted).has('stalled')).toBe(false)
@@ -282,7 +281,7 @@ describe('a stalled worker is not evidence about the pattern', () => {
 
     const evil = script('evil', { find_regex: '((a)*)*$', replace_string: 'X' })
     const innocent = script('innocent', { find_regex: 'zzz', replace_string: 'Y' })
-    await applyDisplayRegexTiered(`${'a'.repeat(52)}!`, [evil, innocent], context, resolveRawTemplates)
+    await applyDisplayRegexTiered(`${'a'.repeat(52)}!`, [evil, innocent], context)
 
     // Outcome is engine and speed dependent, so assert the causal link.
     expect(new Set(persisted).has('evil')).toBe(backendCalls > 0)

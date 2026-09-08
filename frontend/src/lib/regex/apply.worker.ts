@@ -1,5 +1,6 @@
 import { compileRegex } from './compile-regex'
 import { replaceWithinRegexSearchWindow } from './search-window'
+import { cannotMatchRegex } from './match-gate'
 
 export interface ApplyWorkerScript {
   pattern: string
@@ -77,6 +78,19 @@ workerSelf.onmessage = (event) => {
     const scriptElapsedMs: number[] = []
     for (let scriptIndex = 0; scriptIndex < job.scripts.length; scriptIndex += 1) {
       const script = job.scripts[scriptIndex]!
+      if (
+        cannotMatchRegex(result, script.pattern, script.flags)
+        && !script.trimStrings.some((trim) => trim !== '' && result.includes(trim))
+      ) {
+        scriptElapsedMs.push(0)
+        continue
+      }
+      // A checkpoint is needed only before work that could hang. Skipped
+      // scripts produce no progress traffic or deadline resets.
+      if (scriptIndex > 0) workerSelf.postMessage({
+        type: 'checkpoint', jobId: job.jobId, scriptIndex: scriptIndex - 1,
+        result, elapsedMs: scriptElapsedMs[scriptIndex - 1]!,
+      })
       workerSelf.postMessage({
         type: 'progress',
         jobId: job.jobId,
@@ -90,16 +104,6 @@ workerSelf.onmessage = (event) => {
       // here made very fast regexes indistinguishable from one another at 0ms.
       const scriptElapsed = performance.now() - scriptStartedAt
       scriptElapsedMs.push(scriptElapsed)
-      // Keep the parent abreast of the last durable prefix. If a later script
-      // wedges this worker, the replacement work before it does not need to be
-      // executed a second time in the replacement worker/backend sandbox.
-      workerSelf.postMessage({
-        type: 'checkpoint',
-        jobId: job.jobId,
-        scriptIndex,
-        result,
-        elapsedMs: scriptElapsed,
-      })
     }
     workerSelf.postMessage({
       type: 'result',

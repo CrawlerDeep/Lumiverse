@@ -7,7 +7,7 @@ const ESCAPABLE_LITERAL_CHARS = new Set("\\^$.*+?()[]{}|/")
  * null merely disables the optimization; it must never invent a guard for a
  * pattern whose language does not require the literal.
  */
-export function getRequiredTerminalLiteral(pattern: string): string | null {
+export function getRequiredTerminalLiteral(pattern: string, minLength = 4): string | null {
   let suffix = ""
   let depth = 0
   let inCharacterClass = false
@@ -86,7 +86,7 @@ export function getRequiredTerminalLiteral(pattern: string): string | null {
     suffix += char
   }
 
-  return suffix.length >= 4 ? suffix : null
+  return suffix.length >= minLength ? suffix : null
 }
 
 function escapeRegexLiteral(value: string): string {
