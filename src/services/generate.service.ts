@@ -1677,6 +1677,7 @@ async function runPromptPipeline(opts: {
       personaId: opts.personaId,
       personaAddonStates: opts.personaAddonStates,
       generationType: opts.generationType as GenerationType,
+      macroCommit: opts.isDryRun !== true,
       impersonateMode: opts.impersonateMode,
       impersonateInput: opts.impersonateInput,
       userInput: opts.userInput,
