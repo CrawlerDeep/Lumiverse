@@ -1,4 +1,5 @@
 import { getProvider } from "../llm/registry";
+import { describeGenerationStop } from "../llm/generation-stop";
 import type { LlmProvider } from "../llm/provider";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -4302,15 +4303,13 @@ async function runGeneration(
 
       // A terminal API response can still be incomplete. Route these outcomes
       // through the existing partial-save/error UI before executing any tools.
-      if (finishReason === "max_tokens" || finishReason === "refusal") {
-        const detail = finishReason === "max_tokens"
-          ? "The response reached its output token limit before finishing. Thinking also counts toward this limit. Increase the response token limit or lower reasoning effort."
-          : `The provider declined the response${stopDetails?.category ? ` (${stopDetails.category})` : ""}.${stopDetails?.explanation ? ` ${stopDetails.explanation}` : " No explanation was provided."}`;
+      const stopError = describeGenerationStop(finishReason, stopDetails);
+      if (stopError) {
         throw new ProviderRequestError({
           provider: provider.displayName,
           operation: "generation",
           code: finishReason,
-          detail,
+          detail: stopError,
           retryable: false,
         });
       }
