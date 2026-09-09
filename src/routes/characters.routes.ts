@@ -17,7 +17,7 @@ import {
   type ChubExpressionAsset,
 } from "../services/chub-api.service";
 import * as exprSvc from "../services/expressions.service";
-import { queueChubExpressionImport } from "../services/chub-expression-import.service";
+import { markChubExpressionsChecked, queueChubExpressionImport } from "../services/chub-expression-import.service";
 import * as settingsSvc from "../services/settings.service";
 import { fetchBotBooruGalleryUrls } from "../services/botbooru-api.service";
 import { parsePagination } from "../services/pagination";
@@ -750,29 +750,6 @@ app.post("/:id/replace-card", async (c) => {
 // ─── Chub expression backfill ─────────────────────────────────────────────
 // Registered above `/:id`: Hono matches in order, and `/:id` would otherwise
 // capture "chub-expression-candidates" as a character id.
-
-/**
- * Record that this card's Chub source has been consulted.
- *
- * Without this the library sweep can never finish: a card whose source has no
- * pack has no expressions, so it stays a candidate forever and the offer
- * returns on every reload. The stamp is what lets "checked and there was
- * nothing" differ from "never checked".
- */
-function markChubExpressionsChecked(userId: string, characterId: string): void {
-  try {
-    const fresh = svc.getCharacter(userId, characterId);
-    if (!fresh) return;
-    svc.updateCharacter(userId, characterId, {
-      extensions: {
-        ...(fresh.extensions || {}),
-        _lumiverse_chub_expressions_checked: Date.now(),
-      },
-    });
-  } catch {
-    // Losing the stamp only means the card is offered again later.
-  }
-}
 
 /** Labels already mapped for this character, so a backfill can skip them. */
 function existingExpressionLabels(userId: string, characterId: string): Set<string> {
